@@ -1,3 +1,0 @@
-/mnt/c/Users/Michael/Desktop/computer science/C/C-course-finale-project/cmake-build-debug/CMakeFiles/main.dir
-/mnt/c/Users/Michael/Desktop/computer science/C/C-course-finale-project/cmake-build-debug/CMakeFiles/edit_cache.dir
-/mnt/c/Users/Michael/Desktop/computer science/C/C-course-finale-project/cmake-build-debug/CMakeFiles/rebuild_cache.dir

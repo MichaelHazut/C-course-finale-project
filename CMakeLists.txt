@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(MyProject C)
+project(FinaleProj C)
 
 set(CMAKE_C_STANDARD 90)
 add_compile_options(-Wall -pedantic -ansi)

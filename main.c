@@ -1,8 +1,80 @@
-
-#include "main.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 
-int main(void) {
-    printf("Hello, CLion + WSL2!\n");
+#define MAX_LINE_LENGTH 81
+
+/* Define boolean type for ANSI C */
+#define bool int
+#define true 1
+#define false 0
+
+/* Checks if a line starts with a label (ends with a colon) */
+bool is_label(const char *line) {
+    const char *colon;
+    const char *p;
+
+    /* Skip leading spaces or tabs */
+    while (*line == ' ' || *line == '\t') {
+        line++;
+    }
+
+    /* Look for a colon (':') which indicates a label */
+    colon = strchr(line, ':');
+    if (!colon) {
+        return false;
+    }
+
+    /* Check that all characters before the ':' are alphanumeric */
+    for (p = line; p < colon; p++) {
+        if (!isalnum(*p)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+int main(int argc, char *argv[]) {
+    FILE *fp;
+    char line[MAX_LINE_LENGTH];
+
+    /* If the user has not given a file name */
+    if (argc < 2) {
+        printf("Usage: %s <filename.as>\n", argv[0]);
+        return 1;
+    }
+
+    /* Open the file in read mode */
+    fp = fopen(argv[1], "r");
+    if (!fp) {
+        perror("Error opening file");
+        return 1;
+    }
+
+    /* First Pass: Print full contents of the file */
+    printf("\n1) Full contents of the file:\n");
+
+    while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        printf("%s", line);
+    }
+
+    /* Second Pass: Analyze each line */
+    rewind(fp);
+    printf("\n\n\n2) Line analysis:");
+
+    while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        printf("\n>> Line: | %s", line);
+
+        if (is_label(line)) {
+            printf("=> Type: Label\n");
+        } else {
+            printf("=> Type: Not a label\n");
+        }
+    }
+
+    fclose(fp);
     return 0;
 }

@@ -3,34 +3,6 @@
 #include <string.h>
 #include <ctype.h>
 
-/* Represents a line in memory (instruction or data) */
-typedef struct {
-    int address;        /* Memory address */
-    int value;          /* Binary value */
-    int is_code;        /* 1 = instruction, 0 = data */
-} MemoryWord;
-
-/* Represents a label (symbol) */
-typedef struct {
-    char name[31];
-    int address;
-    int is_extern;
-    int is_entry;
-    int is_code;       /* 1 if label points to code, 0 for data */
-} Symbol;
-
-
-
-/* Memory table (array of memory words) */
-#define MAX_MEMORY 1024
-MemoryWord memory[MAX_MEMORY];
-int memory_counter = 100;  /* Starts at 100 as per project specs */
-
-/* Symbol table */
-#define MAX_SYMBOLS 100
-Symbol symbols[MAX_SYMBOLS];
-int symbol_counter = 0;
-
 /* Maximum length for a line in the source file, including null terminator */
 #define MAX_LINE_LENGTH 81
 
@@ -38,6 +10,49 @@ int symbol_counter = 0;
 #define bool int
 #define true 1
 #define false 0
+
+
+/* Represents a line in memory (instruction or data) */
+typedef struct {
+    int address;        /* Memory address */
+    int value;          /* Binary value */
+    int is_code;        /* 1 = instruction, 0 = data */
+} MemoryWord;
+
+/* Struct for symbol table entry */
+typedef struct Symbol {
+    char name[MAX_LINE_LENGTH];
+    int address;
+    bool is_data;
+    bool is_external;
+    bool is_entry;
+    struct Symbol *next;
+} Symbol;
+
+/* Struct for data values (.data and .string) */
+typedef struct DataNode {
+    int address;
+    int value;
+    struct DataNode *next;
+} DataNode;
+
+/* Struct for code instructions */
+typedef struct InstructionNode {
+    int address;
+    char line[MAX_LINE_LENGTH];
+    struct InstructionNode *next;
+} InstructionNode;
+
+
+/* Memory table (array of memory words) */
+#define MAX_MEMORY 1024
+MemoryWord memory[MAX_MEMORY];
+int memory_counter = 100;  /* Starts at 100 as per project specs */
+
+
+/* Symbol table */
+Symbol *symbol_table_head = NULL;
+
 
 /* Checks if a line starts with a label (ends with a colon) */
 bool is_label(const char *line) {

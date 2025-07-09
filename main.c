@@ -109,6 +109,30 @@ bool is_instruction(const char *line) {
 }
 
 
+/* Detects addressing mode of an operand */
+int detect_addressing_mode(const char *operand) {
+    if (!operand) return -1; /* No operand */
+
+    /* Immediate addressing: starts with '#' */
+    if (operand[0] == '#') {
+        return 0;
+    }
+
+    /* Register addressing: starts with 'r' followed by digit (e.g., r3) */
+    if (operand[0] == 'r' && isdigit(operand[1]) && operand[2] == '\0') {
+        return 3;
+    }
+
+    /* Index addressing: contains brackets like LABEL[r2] */
+    if (strchr(operand, '[') && strchr(operand, ']')) {
+        return 2;
+    }
+
+    /* Otherwise it's direct addressing */
+    return 1;
+}
+
+
 /* Parses an instruction line and prints its parts */
 void parse_instruction(const char *line) {
     char copy[MAX_LINE_LENGTH];
@@ -138,11 +162,17 @@ void parse_instruction(const char *line) {
 
     printf("==> Instruction parsed:\n");
     printf("    Opcode: %s\n", opcode);
-    if (operand1) printf("    Operand 1: %s\n", operand1);
-    if (operand2) printf("    Operand 2: %s\n", operand2);
+
+    if (operand1) {
+        printf("    Operand 1: %s\n", operand1);
+        printf("    Addressing mode 1: %d\n", detect_addressing_mode(operand1));
+    }
+
+    if (operand2) {
+        printf("    Operand 2: %s\n", operand2);
+        printf("    Addressing mode 2: %d\n", detect_addressing_mode(operand2));
+    }
 }
-
-
 
 
 int main(int argc, char *argv[]) {

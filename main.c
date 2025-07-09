@@ -37,6 +37,36 @@ bool is_label(const char *line) {
 }
 
 
+/* Checks if the line contains a directive like .data or .string */
+bool is_directive(const char *line) {
+    const char *p;
+
+    /* Skip leading whitespace */
+    while (*line == ' ' || *line == '\t') {
+        line++;
+    }
+
+    /* If there's a label, skip past it */
+    p = strchr(line, ':');
+    if (p) {
+        line = p + 1;
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+    }
+
+    /* Check for known directives */
+    if (strncmp(line, ".data", 5) == 0 ||
+        strncmp(line, ".string", 7) == 0 ||
+        strncmp(line, ".extern", 7) == 0 ||
+        strncmp(line, ".entry", 6) == 0) {
+        return true;
+        }
+
+    return false;
+}
+
+
 int main(int argc, char *argv[]) {
     FILE *fp;
     char line[MAX_LINE_LENGTH];
@@ -68,11 +98,19 @@ int main(int argc, char *argv[]) {
     while (fgets(line, MAX_LINE_LENGTH, fp)) {
         printf("\n>> Line: | %s", line);
 
-        if (is_label(line)) {
+        bool has_label = is_label(line);
+        bool has_directive = is_directive(line);
+
+        if (has_label) {
             printf("=> Type: Label\n");
-        } else {
-            printf("=> Type: Not a label\n");
         }
+        if (has_directive) {
+            printf("=> Type: Directive\n");
+        }
+        if (!has_label && !has_directive) {
+            printf("=> Type: Not a label or directive\n");
+        }
+
     }
 
     fclose(fp);

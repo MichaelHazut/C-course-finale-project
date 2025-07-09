@@ -67,6 +67,47 @@ bool is_directive(const char *line) {
 }
 
 
+/* Checks if the line contains a valid instruction */
+bool is_instruction(const char *line) {
+    const char *p;
+
+    /* Skip leading whitespace */
+    while (*line == ' ' || *line == '\t') {
+        line++;
+    }
+
+    /* If there's a label, skip past it */
+    p = strchr(line, ':');
+    if (p) {
+        line = p + 1;
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+    }
+
+    /* Check for known instructions */
+    if (strncmp(line, "mov", 3) == 0 ||
+        strncmp(line, "add", 3) == 0 ||
+        strncmp(line, "sub", 3) == 0 ||
+        strncmp(line, "cmp", 3) == 0 ||
+        strncmp(line, "lea", 3) == 0 ||
+        strncmp(line, "clr", 3) == 0 ||
+        strncmp(line, "not", 3) == 0 ||
+        strncmp(line, "inc", 3) == 0 ||
+        strncmp(line, "dec", 3) == 0 ||
+        strncmp(line, "jmp", 3) == 0 ||
+        strncmp(line, "bne", 3) == 0 ||
+        strncmp(line, "jsr", 3) == 0 ||
+        strncmp(line, "red", 3) == 0 ||
+        strncmp(line, "prn", 3) == 0 ||
+        strncmp(line, "rts", 3) == 0 ||
+        strncmp(line, "stop", 4) == 0) {
+        return true;
+        }
+
+    return false;
+}
+
 int main(int argc, char *argv[]) {
     FILE *fp;
     char line[MAX_LINE_LENGTH];
@@ -100,6 +141,7 @@ int main(int argc, char *argv[]) {
 
         bool has_label = is_label(line);
         bool has_directive = is_directive(line);
+        bool has_instruction = is_instruction(line);
 
         if (has_label) {
             printf("=> Type: Label\n");
@@ -107,9 +149,13 @@ int main(int argc, char *argv[]) {
         if (has_directive) {
             printf("=> Type: Directive\n");
         }
-        if (!has_label && !has_directive) {
-            printf("=> Type: Not a label or directive\n");
+        if (has_instruction) {
+            printf("=> Type: Instruction\n");
         }
+        if (!has_label && !has_directive && !has_instruction) {
+            printf("=> Type: Unknown or empty line\n");
+        }
+
 
     }
 

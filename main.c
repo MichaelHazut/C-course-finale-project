@@ -3,6 +3,35 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Represents a line in memory (instruction or data) */
+typedef struct {
+    int address;        /* Memory address */
+    int value;          /* Binary value */
+    int is_code;        /* 1 = instruction, 0 = data */
+} MemoryWord;
+
+/* Represents a label (symbol) */
+typedef struct {
+    char name[31];
+    int address;
+    int is_extern;
+    int is_entry;
+    int is_code;       /* 1 if label points to code, 0 for data */
+} Symbol;
+
+
+
+/* Memory table (array of memory words) */
+#define MAX_MEMORY 1024
+MemoryWord memory[MAX_MEMORY];
+int memory_counter = 100;  /* Starts at 100 as per project specs */
+
+/* Symbol table */
+#define MAX_SYMBOLS 100
+Symbol symbols[MAX_SYMBOLS];
+int symbol_counter = 0;
+
+/* Maximum length for a line in the source file, including null terminator */
 #define MAX_LINE_LENGTH 81
 
 /* Define boolean type for ANSI C */

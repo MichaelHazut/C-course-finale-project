@@ -219,6 +219,67 @@ void parse_instruction(const char *line) {
 }
 
 
+void first_pass(FILE *fp) {
+    char line[MAX_LINE_LENGTH];
+    int line_number = 0;
+
+    rewind(fp);
+
+    while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        line_number++;
+
+        /* Skip empty or comment lines */
+        if (line[0] == '\n' || line[0] == ';') continue;
+
+        /* Trim leading whitespace */
+        while (isspace(*line)) line++;
+
+        bool has_label = is_label(line);
+        bool is_dir = is_directive(line);
+        bool is_instr = is_instruction(line);
+
+        /* If line has a label, extract and register it */
+        if (has_label) {
+            char label_name[MAX_LINE_LENGTH];
+            sscanf(line, "%[^:]:", label_name);
+
+            /* Create a new Symbol node */
+            Symbol *new_sym = (Symbol *)malloc(sizeof(Symbol));
+            strcpy(new_sym->name, label_name);
+            new_sym->address = memory_counter;
+            new_sym->is_entry = false;
+            new_sym->is_external = false;
+            new_sym->is_data = is_dir;
+            new_sym->next = symbol_table_head;
+            symbol_table_head = new_sym;
+
+            /* Move pointer after label for further processing */
+            line = strchr(line, ':');
+            if (line) line++;
+        }
+
+        /* If it's a directive (.data / .string) */
+        if (is_dir) {
+            // TODO: implement parse_data_directive(line);
+        }
+
+        /* If it's an instruction */
+        else if (is_instr) {
+            InstructionNode *new_instr = (InstructionNode *)malloc(sizeof(InstructionNode));
+            new_instr->address = memory_counter;
+            strncpy(new_instr->line, line, MAX_LINE_LENGTH);
+            new_instr->line[MAX_LINE_LENGTH - 1] = '\0';
+            new_instr->next = NULL;
+
+            // TODO: add to instruction list (we'll define head pointer soon)
+
+            memory_counter++; // Each instruction takes 1 word for now (simplification)
+        }
+    }
+}
+
+
+
 int main(int argc, char *argv[]) {
     FILE *fp;
     char line[MAX_LINE_LENGTH];

@@ -108,6 +108,43 @@ bool is_instruction(const char *line) {
     return false;
 }
 
+
+/* Parses an instruction line and prints its parts */
+void parse_instruction(const char *line) {
+    char copy[MAX_LINE_LENGTH];
+    char *label = NULL;
+    char *opcode;
+    char *operand1 = NULL;
+    char *operand2 = NULL;
+
+    /* Make a copy because strtok modifies the string */
+    strncpy(copy, line, MAX_LINE_LENGTH);
+    copy[MAX_LINE_LENGTH - 1] = '\0';
+
+    /* If there's a label, skip it */
+    char *colon = strchr(copy, ':');
+    if (colon) {
+        label = strtok(copy, ":");
+        opcode = strtok(NULL, " \t\n");
+    } else {
+        opcode = strtok(copy, " \t\n");
+    }
+
+    /* Get first operand */
+    operand1 = strtok(NULL, ", \t\n");
+
+    /* Get second operand (if exists) */
+    operand2 = strtok(NULL, ", \t\n");
+
+    printf("==> Instruction parsed:\n");
+    printf("    Opcode: %s\n", opcode);
+    if (operand1) printf("    Operand 1: %s\n", operand1);
+    if (operand2) printf("    Operand 2: %s\n", operand2);
+}
+
+
+
+
 int main(int argc, char *argv[]) {
     FILE *fp;
     char line[MAX_LINE_LENGTH];
@@ -151,6 +188,7 @@ int main(int argc, char *argv[]) {
         }
         if (has_instruction) {
             printf("=> Type: Instruction\n");
+            parse_instruction(line);
         }
         if (!has_label && !has_directive && !has_instruction) {
             printf("=> Type: Unknown or empty line\n");

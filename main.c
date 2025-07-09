@@ -53,6 +53,10 @@ int memory_counter = 100;  /* Starts at 100 as per project specs */
 /* Symbol table */
 Symbol *symbol_table_head = NULL;
 
+/* Instruction list */
+InstructionNode *instruction_head = NULL;
+InstructionNode *instruction_tail = NULL;
+
 
 /* Checks if a line starts with a label (ends with a colon) */
 bool is_label(const char *line) {
@@ -221,62 +225,99 @@ void parse_instruction(const char *line) {
 
 void first_pass(FILE *fp) {
     char line[MAX_LINE_LENGTH];
+    char *line_ptr;
     int line_number = 0;
 
     rewind(fp);
 
     while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        Symbol *new_sym;
+        InstructionNode *new_instr;
+        char label_name[MAX_LINE_LENGTH];
+
+        int is_label_line;
+        int is_dir;
+        int is_instr;
+
         line_number++;
 
         /* Skip empty or comment lines */
-        if (line[0] == '\n' || line[0] == ';') continue;
+        if (line[0] == '\n' || line[0] == ';') {
+            continue;
+        }
 
-        /* Trim leading whitespace */
-        while (isspace(*line)) line++;
+        /* Start from the beginning of line */
+        line_ptr = line;
 
-        bool has_label = is_label(line);
-        bool is_dir = is_directive(line);
-        bool is_instr = is_instruction(line);
+        /* Trim leading spaces */
+        while (isspace(*line_ptr)) {
+            line_ptr++;
+        }
 
-        /* If line has a label, extract and register it */
-        if (has_label) {
-            char label_name[MAX_LINE_LENGTH];
-            sscanf(line, "%[^:]:", label_name);
+        is_label_line = is_label(line_ptr);
+        is_dir = is_directive(line_ptr);
+        is_instr = is_instruction(line_ptr);
 
-            /* Create a new Symbol node */
-            Symbol *new_sym = (Symbol *)malloc(sizeof(Symbol));
+        /* If the line has a label, extract and register it */
+        if (is_label_line) {
+            sscanf(line_ptr, "%[^:]:", label_name);
+
+            new_sym = (Symbol *)malloc(sizeof(Symbol));
+            if (!new_sym) {
+                printf("Memory allocation error at line %d\n", line_number);
+                continue;
+            }
+
             strcpy(new_sym->name, label_name);
             new_sym->address = memory_counter;
-            new_sym->is_entry = false;
-            new_sym->is_external = false;
+            new_sym->is_entry = 0;
+            new_sym->is_external = 0;
             new_sym->is_data = is_dir;
             new_sym->next = symbol_table_head;
             symbol_table_head = new_sym;
 
-            /* Move pointer after label for further processing */
-            line = strchr(line, ':');
-            if (line) line++;
+            /* Move pointer after label */
+            line_ptr = strchr(line_ptr, ':');
+            if (line_ptr != NULL) {
+                line_ptr++;
+                while (isspace(*line_ptr)) {
+                    line_ptr++;
+                }
+            }
         }
 
         /* If it's a directive (.data / .string) */
         if (is_dir) {
-            // TODO: implement parse_data_directive(line);
+            /* TODO: implement parse_data_directive(line_ptr); */
         }
-
         /* If it's an instruction */
         else if (is_instr) {
-            InstructionNode *new_instr = (InstructionNode *)malloc(sizeof(InstructionNode));
+            new_instr = (InstructionNode *)malloc(sizeof(InstructionNode));
+            if (!new_instr) {
+                printf("Memory allocation error at line %d\n", line_number);
+                continue;
+            }
+
             new_instr->address = memory_counter;
-            strncpy(new_instr->line, line, MAX_LINE_LENGTH);
+            strncpy(new_instr->line, line_ptr, MAX_LINE_LENGTH);
             new_instr->line[MAX_LINE_LENGTH - 1] = '\0';
             new_instr->next = NULL;
 
-            // TODO: add to instruction list (we'll define head pointer soon)
+            /* Add to instruction list */
+            if (instruction_head == NULL) {
+                instruction_head = new_instr;
+                instruction_tail = new_instr;
+            } else {
+                instruction_tail->next = new_instr;
+                instruction_tail = new_instr;
+            }
 
-            memory_counter++; // Each instruction takes 1 word for now (simplification)
+            memory_counter++; /* Each instruction takes 1 word (basic assumption) */
         }
     }
 }
+
+
 
 
 

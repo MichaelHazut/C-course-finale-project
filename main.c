@@ -471,6 +471,39 @@ void mark_entries(FILE *fp) {
     }
 }
 
+/* Creates the .ent file and writes all entry labels */
+void create_entry_file(const char *original_filename) {
+    FILE *ent_fp;
+    char ent_filename[FILENAME_MAX];
+    Symbol *curr = symbol_table_head;
+
+    /* Create new filename by replacing .as with .ent */
+    strncpy(ent_filename, original_filename, FILENAME_MAX);
+    ent_filename[FILENAME_MAX - 1] = '\0';
+    char *dot = strrchr(ent_filename, '.');
+    if (dot != NULL) {
+        strcpy(dot, ".ent");
+    } else {
+        strcat(ent_filename, ".ent");
+    }
+
+    /* Open the file for writing */
+    ent_fp = fopen(ent_filename, "w");
+    if (!ent_fp) {
+        printf("Error: could not create %s file.\n", ent_filename);
+        return;
+    }
+
+    /* Write all entry symbols to the file */
+    while (curr != NULL) {
+        if (curr->is_entry) {
+            fprintf(ent_fp, "%s %03d\n", curr->name, curr->address);
+        }
+        curr = curr->next;
+    }
+
+    fclose(ent_fp);
+}
 
 
 void print_memory() {
@@ -554,6 +587,7 @@ int main(int argc, char *argv[]) {
     printf("\n\n\n2) Line analysis:");
     first_pass(fp);
     mark_entries(fp);
+    create_entry_file(argv[1]);
     print_memory();
     print_symbol_table();
 

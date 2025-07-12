@@ -222,6 +222,69 @@ void parse_instruction(const char *line) {
     }
 }
 
+/* Encodes a single assembly instruction into an integer machine word, Returns the encoded value as an int. */
+int encode_instruction(const char *line) {
+    char copy[MAX_LINE_LENGTH];
+    char *opcode_str, *operand1 = NULL, *operand2 = NULL;
+    int opcode = 0;
+    int src_mode = 0, dst_mode = 0;
+    int instruction_word = 0;
+
+    strncpy(copy, line, MAX_LINE_LENGTH);
+    copy[MAX_LINE_LENGTH - 1] = '\0';
+
+    /* Skip label if exists */
+    char *colon = strchr(copy, ':');
+    if (colon) {
+        opcode_str = strtok(colon + 1, " \t\n");
+    } else {
+        opcode_str = strtok(copy, " \t\n");
+    }
+
+    /* Read operands */
+    operand1 = strtok(NULL, ", \t\n");
+    operand2 = strtok(NULL, ", \t\n");
+
+    /* Translate opcode to number */
+    if (strcmp(opcode_str, "mov") == 0) opcode = 0;
+    else if (strcmp(opcode_str, "cmp") == 0) opcode = 1;
+    else if (strcmp(opcode_str, "add") == 0) opcode = 2;
+    else if (strcmp(opcode_str, "sub") == 0) opcode = 3;
+    else if (strcmp(opcode_str, "not") == 0) opcode = 4;
+    else if (strcmp(opcode_str, "clr") == 0) opcode = 5;
+    else if (strcmp(opcode_str, "lea") == 0) opcode = 6;
+    else if (strcmp(opcode_str, "inc") == 0) opcode = 7;
+    else if (strcmp(opcode_str, "dec") == 0) opcode = 8;
+    else if (strcmp(opcode_str, "jmp") == 0) opcode = 9;
+    else if (strcmp(opcode_str, "bne") == 0) opcode = 10;
+    else if (strcmp(opcode_str, "jsr") == 0) opcode = 11;
+    else if (strcmp(opcode_str, "red") == 0) opcode = 12;
+    else if (strcmp(opcode_str, "prn") == 0) opcode = 13;
+    else if (strcmp(opcode_str, "rts") == 0) opcode = 14;
+    else if (strcmp(opcode_str, "stop") == 0) opcode = 15;
+
+    /* Set addressing modes */
+    if (operand1) {
+        src_mode = detect_addressing_mode(operand1);
+    }
+    if (operand2) {
+        dst_mode = detect_addressing_mode(operand2);
+    }
+
+    /* Build the instruction word:
+       We'll shift bits to encode opcode and modes
+       Format:
+       Bits 0–3: opcode
+       Bits 4–5: src mode
+       Bits 6–7: dst mode
+    */
+    instruction_word |= (opcode & 0xF);          /* 4 bits */
+    instruction_word |= ((src_mode & 0x3) << 4); /* 2 bits */
+    instruction_word |= ((dst_mode & 0x3) << 6); /* 2 bits */
+
+    return instruction_word;
+}
+
 
 void parse_data_directive(const char *line_ptr) {
     printf("Parsing directive: [%s]\n", line_ptr);
@@ -410,7 +473,7 @@ void first_pass(FILE *fp) {
             /* Store this instruction in memory[] as code */
             if (memory_counter < MAX_MEMORY) {
                 memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = 0; /* Placeholder for now */
+                memory[memory_counter].value = encode_instruction(line_ptr);
                 memory[memory_counter].is_code = 1;
             } else {
                 printf("Error: memory overflow when adding instruction at line %d.\n", line_number);

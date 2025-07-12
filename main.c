@@ -505,6 +505,64 @@ void create_entry_file(const char *original_filename) {
     fclose(ent_fp);
 }
 
+/* Writes the .ext file that lists where external labels were used */
+void write_ext_file(const char *filename) {
+    InstructionNode *curr_instr = instruction_head;
+    FILE *ext_file;
+    char ext_filename[FILENAME_MAX];
+    char *opcode, *operand1, *operand2;
+    char line_copy[MAX_LINE_LENGTH];
+    int addr;
+
+    /* Generate the file name with .ext extension */
+    strcpy(ext_filename, filename);
+    strcat(ext_filename, ".ext");
+
+    ext_file = fopen(ext_filename, "w");
+    if (!ext_file) {
+        printf("Error: could not create %s\n", ext_filename);
+        return;
+    }
+
+    while (curr_instr != NULL) {
+        /* Make a copy of the line to tokenize */
+        strncpy(line_copy, curr_instr->line, MAX_LINE_LENGTH);
+        line_copy[MAX_LINE_LENGTH - 1] = '\0';
+
+        opcode = strtok(line_copy, " \t\n");
+        operand1 = strtok(NULL, ", \t\n");
+        operand2 = strtok(NULL, ", \t\n");
+
+        addr = curr_instr->address;
+
+        /* Check if operand1 is an external label */
+        if (operand1 != NULL) {
+            Symbol *sym = symbol_table_head;
+            while (sym) {
+                if (sym->is_external && strcmp(sym->name, operand1) == 0) {
+                    fprintf(ext_file, "%s %d\n", operand1, addr);
+                }
+                sym = sym->next;
+            }
+        }
+
+        /* Check if operand2 is an external label */
+        if (operand2 != NULL) {
+            Symbol *sym = symbol_table_head;
+            while (sym) {
+                if (sym->is_external && strcmp(sym->name, operand2) == 0) {
+                    fprintf(ext_file, "%s %d\n", operand2, addr);
+                }
+                sym = sym->next;
+            }
+        }
+
+        curr_instr = curr_instr->next;
+    }
+
+    fclose(ext_file);
+}
+
 
 void print_memory() {
     int i;
@@ -588,6 +646,7 @@ int main(int argc, char *argv[]) {
     first_pass(fp);
     mark_entries(fp);
     create_entry_file(argv[1]);
+    write_ext_file(argv[1]);
     print_memory();
     print_symbol_table();
 

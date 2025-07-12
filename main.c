@@ -563,6 +563,49 @@ void write_ext_file(const char *filename) {
     fclose(ext_file);
 }
 
+/* Creates the .ob file containing the memory image (code + data) */
+void create_ob_file(const char *original_filename) {
+    FILE *ob_fp;
+    char ob_filename[FILENAME_MAX];
+    int i, instruction_count = 0, data_count = 0;
+
+    /* Count instructions and data */
+    for (i = 100; i < memory_counter; i++) {
+        if (memory[i].is_code)
+            instruction_count++;
+        else
+            data_count++;
+    }
+
+    /* Create .ob file name */
+    strncpy(ob_filename, original_filename, FILENAME_MAX);
+    ob_filename[FILENAME_MAX - 1] = '\0';
+    char *dot = strrchr(ob_filename, '.');
+    if (dot != NULL) {
+        strcpy(dot, ".ob");
+    } else {
+        strcat(ob_filename, ".ob");
+    }
+
+    /* Open file for writing */
+    ob_fp = fopen(ob_filename, "w");
+    if (!ob_fp) {
+        printf("Error: could not create %s file.\n", ob_filename);
+        return;
+    }
+
+    /* Write header line: number of code and data words */
+    fprintf(ob_fp, "%d %d\n", instruction_count, data_count);
+
+    /* Write memory words */
+    for (i = 100; i < memory_counter; i++) {
+        fprintf(ob_fp, "%03d %d\n", memory[i].address, memory[i].value);
+    }
+
+    fclose(ob_fp);
+}
+
+
 
 void print_memory() {
     int i;
@@ -647,6 +690,7 @@ int main(int argc, char *argv[]) {
     mark_entries(fp);
     create_entry_file(argv[1]);
     write_ext_file(argv[1]);
+    create_ob_file(argv[1]);
     print_memory();
     print_symbol_table();
 

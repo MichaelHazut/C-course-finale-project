@@ -407,7 +407,16 @@ void first_pass(FILE *fp) {
                 instruction_tail = new_instr;
             }
 
-            memory_counter++; /* Each instruction takes 1 word (basic assumption) */
+            /* Store this instruction in memory[] as code */
+            if (memory_counter < MAX_MEMORY) {
+                memory[memory_counter].address = memory_counter;
+                memory[memory_counter].value = 0; /* Placeholder for now */
+                memory[memory_counter].is_code = 1;
+            } else {
+                printf("Error: memory overflow when adding instruction at line %d.\n", line_number);
+            }
+
+            memory_counter++;  /* Instruction takes 1 memory word */
         }
     }
 }

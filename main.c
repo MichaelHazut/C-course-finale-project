@@ -223,6 +223,101 @@ void parse_instruction(const char *line) {
 }
 
 
+void parse_data_directive(const char *line_ptr) {
+    printf("Parsing directive: [%s]\n", line_ptr);
+
+    char buffer[MAX_LINE_LENGTH];
+    char *token;
+    int i;
+
+    /* נתקדם אחרי .data או .string */
+    while (isspace(*line_ptr)) line_ptr++;
+
+    if (strncmp(line_ptr, ".extern", 7) == 0) {
+        line_ptr += 7;
+        while (isspace(*line_ptr)) line_ptr++;
+
+        /* קרא את שם הסימול החיצוני */
+        char label_name[MAX_LINE_LENGTH];
+        sscanf(line_ptr, "%s", label_name);
+
+        /* צור סמל חדש */
+        Symbol *new_sym = (Symbol *)malloc(sizeof(Symbol));
+        if (!new_sym) {
+            printf("Memory allocation error in .extern\n");
+            return;
+        }
+
+        strcpy(new_sym->name, label_name);
+        new_sym->address = 0; /* חיצוני – לא ידוע */
+        new_sym->is_data = 0;
+        new_sym->is_external = 1;
+        new_sym->is_entry = 0;
+        new_sym->next = symbol_table_head;
+        symbol_table_head = new_sym;
+
+        return; /* לא ממשיכים הלאה */
+    }
+
+    /* נבדוק איזו הנחיה זו */
+    if (strncmp(line_ptr, ".data", 5) == 0) {
+        line_ptr += 5;
+        while (isspace(*line_ptr)) line_ptr++;
+
+        /* נעתיק את החלק עם המספרים */
+        strncpy(buffer, line_ptr, MAX_LINE_LENGTH);
+        buffer[MAX_LINE_LENGTH - 1] = '\0';
+
+        token = strtok(buffer, ", \t\n");
+        while (token != NULL) {
+            int value = atoi(token);
+
+            if (memory_counter < MAX_MEMORY) {
+                memory[memory_counter].address = memory_counter;
+                memory[memory_counter].value = value;
+                memory[memory_counter].is_code = 0; /* זה data */
+                memory_counter++;
+            } else {
+                printf("Error: memory overflow in .data directive.\n");
+            }
+
+            token = strtok(NULL, ", \t\n");
+        }
+
+    } else if (strncmp(line_ptr, ".string", 7) == 0) {
+        line_ptr += 7;
+        while (isspace(*line_ptr)) line_ptr++;
+
+        if (*line_ptr != '"') {
+            printf("Error: invalid string format.\n");
+            return;
+        }
+
+        line_ptr++; /* דילוג על גרשיים */
+
+        while (*line_ptr && *line_ptr != '"') {
+            if (memory_counter < MAX_MEMORY) {
+                memory[memory_counter].address = memory_counter;
+                memory[memory_counter].value = (int)(*line_ptr);
+                memory[memory_counter].is_code = 0;
+                memory_counter++;
+                line_ptr++;
+            } else {
+                printf("Error: memory overflow in .string directive.\n");
+                return;
+            }
+        }
+
+        /* אחרי סוגר " להוסיף null (0) */
+        if (memory_counter < MAX_MEMORY) {
+            memory[memory_counter].address = memory_counter;
+            memory[memory_counter].value = 0;
+            memory[memory_counter].is_code = 0;
+            memory_counter++;
+        }
+    }
+}
+
 void first_pass(FILE *fp) {
     char line[MAX_LINE_LENGTH];
     char *line_ptr;
@@ -288,7 +383,7 @@ void first_pass(FILE *fp) {
 
         /* If it's a directive (.data / .string) */
         if (is_dir) {
-            /* TODO: implement parse_data_directive(line_ptr); */
+            parse_data_directive(line_ptr);
         }
         /* If it's an instruction */
         else if (is_instr) {
@@ -317,9 +412,92 @@ void first_pass(FILE *fp) {
     }
 }
 
+/* Goes over the file again and handles .entry lines */
+void mark_entries(FILE *fp) {
+    char line[MAX_LINE_LENGTH];
+    char *line_ptr;
+    int line_number = 0;
+
+    rewind(fp);  /* Start reading the file from the beginning */
+
+    while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        line_number++;
+
+        /* Skip empty lines or comment lines */
+        if (line[0] == '\n' || line[0] == ';') {
+            continue;
+        }
+
+        line_ptr = line;
+
+        /* Skip spaces at the beginning of the line */
+        while (isspace(*line_ptr)) {
+            line_ptr++;
+        }
+
+        /* Check if the line has a .entry directive */
+        if (strncmp(line_ptr, ".entry", 6) == 0 || strstr(line_ptr, ".entry") != NULL) {
+            char label_name[MAX_LINE_LENGTH];
+            Symbol *curr = symbol_table_head;
+            bool found = false;
+
+            /* Move pointer past the ".entry" part */
+            line_ptr = strstr(line_ptr, ".entry");
+            line_ptr += 6;
+
+            /* Skip spaces before the label name */
+            while (isspace(*line_ptr)) {
+                line_ptr++;
+            }
+
+            /* Get the label name */
+            sscanf(line_ptr, "%s", label_name);
+
+            /* Go through the symbol table and search for that label */
+            while (curr != NULL) {
+                if (strcmp(curr->name, label_name) == 0) {
+                    curr->is_entry = 1;  /* Mark this symbol as entry */
+                    found = true;
+                    break;
+                }
+                curr = curr->next;
+            }
+
+            /* If not found, print error message */
+            if (!found) {
+                printf("Error: entry label '%s' not found in symbol table (line %d).\n", label_name, line_number);
+            }
+        }
+    }
+}
 
 
 
+void print_memory() {
+    int i;
+
+    printf("\n--- Memory Content ---\n");
+    for (i = 100; i < memory_counter; i++) {
+        printf("Address: %03d | Value: %d | Type: %s\n",
+               memory[i].address,
+               memory[i].value,
+               memory[i].is_code ? "Code" : "Data");
+    }
+}
+
+void print_symbol_table() {
+    printf("\n--- Symbol Table ---\n");
+    Symbol *curr = symbol_table_head;
+    while (curr) {
+        printf("Label: %s | Address: %03d | Type: %s%s%s\n",
+               curr->name,
+               curr->address,
+               curr->is_external ? "External" : (curr->is_data ? "Data" : "Code"),
+               curr->is_entry ? " | Entry" : "",
+               "");
+        curr = curr->next;
+    }
+}
 
 int main(int argc, char *argv[]) {
     FILE *fp;
@@ -372,6 +550,12 @@ int main(int argc, char *argv[]) {
 
 
     }
+
+    printf("\n\n\n2) Line analysis:");
+    first_pass(fp);
+    mark_entries(fp);
+    print_memory();
+    print_symbol_table();
 
     fclose(fp);
     return 0;

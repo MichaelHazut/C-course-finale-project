@@ -43,6 +43,14 @@ typedef struct InstructionNode {
     struct InstructionNode *next;
 } InstructionNode;
 
+typedef struct Macro {
+    char name[MAX_LINE_LENGTH];
+    char content[MAX_LINE_LENGTH * 10];
+    struct Macro *next;
+} Macro;
+
+/* Macro table */
+Macro *macro_table = NULL;
 
 /* Memory table (array of memory words) */
 #define MAX_MEMORY 1024
@@ -56,6 +64,98 @@ Symbol *symbol_table_head = NULL;
 /* Instruction list */
 InstructionNode *instruction_head = NULL;
 InstructionNode *instruction_tail = NULL;
+
+
+void add_macro(const char *name, const char *content) {
+    Macro *new_macro = (Macro *)malloc(sizeof(Macro));
+    if (!new_macro) {
+        printf("Error: memory allocation failed for macro.\n");
+        return;
+    }
+
+    strcpy(new_macro->name, name);
+    strcpy(new_macro->content, content);
+    new_macro->next = macro_table;
+    macro_table = new_macro;
+}
+
+
+void preprocess_file(const char *input_filename, const char *output_filename) {
+    FILE *input_fp = fopen(input_filename, "r");
+    FILE *output_fp = fopen(output_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    char macro_name[MAX_LINE_LENGTH];
+    char macro_content[MAX_LINE_LENGTH * 10];
+    int in_macro = 0;
+
+    if (!input_fp || !output_fp) {
+        printf("Error: failed to open file(s).\n");
+        return;
+    }
+
+    while (fgets(line, MAX_LINE_LENGTH, input_fp)) {
+        if (strncmp(line, "macro", 5) == 0) {
+            in_macro = 1;
+            sscanf(line, "macro %s", macro_name);
+            macro_content[0] = '\0';  /* Clear macro content buffer */
+            continue;
+        }
+
+        if (in_macro) {
+            if (strncmp(line, "endmacro", 8) == 0) {
+                in_macro = 0;
+                add_macro(macro_name, macro_content);
+                continue;
+            }
+            strcat(macro_content, "\t");
+            strcat(macro_content, line);  /* Append line to macro content */
+        } else {
+            fprintf(output_fp, "%s", line);  /* Regular line, write as-is */
+        }
+    }
+
+    fclose(input_fp);
+    fclose(output_fp);
+}
+
+void expand_macros(const char *input_filename, const char *output_filename) {
+    FILE *input_fp = fopen(input_filename, "r");
+    FILE *output_fp = fopen(output_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    Macro *curr_macro;
+
+    if (!input_fp || !output_fp) {
+        printf("Error: failed to open file(s) in expand_macros.\n");
+        return;
+    }
+
+    while (fgets(line, MAX_LINE_LENGTH, input_fp)) {
+        int matched = 0;
+
+        /* Trim leading spaces */
+        char *trimmed = line;
+        while (isspace(*trimmed)) trimmed++;
+
+        /* Try to match with a macro name */
+        curr_macro = macro_table;
+        while (curr_macro != NULL) {
+            if (strncmp(trimmed, curr_macro->name, strlen(curr_macro->name)) == 0 &&
+                isspace(trimmed[strlen(curr_macro->name)]) || trimmed[strlen(curr_macro->name)] == '\n') {
+                fprintf(output_fp, "%s", curr_macro->content);
+                matched = 1;
+                break;
+                }
+            curr_macro = curr_macro->next;
+        }
+
+        if (!matched) {
+            fprintf(output_fp, "%s", line);  /* Not a macro, write as-is */
+        }
+    }
+
+    fclose(input_fp);
+    fclose(output_fp);
+}
 
 
 /* Checks if a line starts with a label (ends with a colon) */
@@ -708,6 +808,8 @@ void print_symbol_table() {
 int main(int argc, char *argv[]) {
     FILE *fp;
     char line[MAX_LINE_LENGTH];
+    char pre_filename[FILENAME_MAX];
+    char am_filename[FILENAME_MAX];
 
     /* If the user has not given a file name */
     if (argc < 2) {
@@ -715,24 +817,47 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Open the file in read mode */
-    fp = fopen(argv[1], "r");
+    /* Step 1: Generate .pre and .am filenames */
+    strncpy(pre_filename, argv[1], FILENAME_MAX);
+    pre_filename[FILENAME_MAX - 1] = '\0';
+    char *dot = strrchr(pre_filename, '.');
+    if (dot != NULL) {
+        strcpy(dot, ".pre");
+    } else {
+        strcat(pre_filename, ".pre");
+    }
+
+    strncpy(am_filename, argv[1], FILENAME_MAX);
+    am_filename[FILENAME_MAX - 1] = '\0';
+    dot = strrchr(am_filename, '.');
+    if (dot != NULL) {
+        strcpy(dot, ".am");
+    } else {
+        strcat(am_filename, ".am");
+    }
+
+    /* Step 2: Run preprocessor to handle macros */
+    preprocess_file(argv[1], pre_filename);
+
+    /* Step 3: Expand macro usages and write to .am file */
+    expand_macros(pre_filename, am_filename);
+
+    /* Step 4: Open .am file for reading */
+    fp = fopen(am_filename, "r");
     if (!fp) {
-        perror("Error opening file");
+        perror("Error opening .am file");
         return 1;
     }
 
-    /* First Pass: Print full contents of the file */
+    /* Step 5: First Pass - Print full contents */
     printf("\n1) Full contents of the file:\n");
-
     while (fgets(line, MAX_LINE_LENGTH, fp)) {
         printf("%s", line);
     }
 
-    /* Second Pass: Analyze each line */
+    /* Step 6: Second Pass - Analyze each line */
     rewind(fp);
     printf("\n\n\n2) Line analysis:");
-
     while (fgets(line, MAX_LINE_LENGTH, fp)) {
         printf("\n>> Line: | %s", line);
 
@@ -753,19 +878,23 @@ int main(int argc, char *argv[]) {
         if (!has_label && !has_directive && !has_instruction) {
             printf("=> Type: Unknown or empty line\n");
         }
-
-
     }
 
+    /* Step 7: Assemble */
     printf("\n\n\n2) Line analysis:");
+    rewind(fp);
     first_pass(fp);
+    rewind(fp);
     mark_entries(fp);
     create_entry_file(argv[1]);
     write_ext_file(argv[1]);
     create_ob_file(argv[1]);
+
+    /* Debug info */
     print_memory();
     print_symbol_table();
 
     fclose(fp);
     return 0;
 }
+

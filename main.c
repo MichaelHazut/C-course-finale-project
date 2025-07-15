@@ -111,6 +111,17 @@ Symbol *symbol_table_head = NULL;
 InstructionNode *instruction_head = NULL;
 InstructionNode *instruction_tail = NULL;
 
+/* Implementation */
+Symbol *find_symbol(const char *name) {
+    Symbol *cur = symbol_table_head;
+    while (cur) {
+        if (strcmp(cur->name, name) == 0) {
+            return cur;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
 
 /* Validate operand count and addressing modes for one instruction */
 bool validate_instruction(const char *line, int line_num, const char *file_name) {
@@ -773,14 +784,128 @@ void first_pass(FILE *fp, const char *filename) {
     }
 }
 
-/* Perform the second pass: mark .entry labels, and write .ent, .ext and .ob files */
-void second_pass(FILE *fp, const char *orig_filename) {
-    rewind(fp);                  /* go back to start of .am file */
-    mark_entries(fp);            /* mark entry symbols */
-    create_entry_file(orig_filename);
-    write_ext_file(orig_filename);
-    create_ob_file(orig_filename);
+void generate_extra_operand_words(void) {
+    InstructionNode *cur;
+    Symbol *sym;
+    MemoryWord temp[MAX_MEMORY];
+    int extra, i, k, new_cnt;
+    char buf1[MAX_LINE_LENGTH];
+    char buf2[MAX_LINE_LENGTH];
+    char *tok1, *tok2;
+    char *ops1[2];
+    char *ops2[2];
+    int m1, m2, modes[2], val;
+
+    /* 1) Count how many extra words are needed */
+    extra = 0;
+    cur = instruction_head;
+    while (cur) {
+        /* tokenize operands */
+        strncpy(buf1, cur->line, MAX_LINE_LENGTH);
+        buf1[MAX_LINE_LENGTH-1] = '\0';
+        tok1 = strtok(buf1, " \t\n");      /* skip opcode */
+        ops1[0] = strtok(NULL, ", \t\n");
+        ops1[1] = strtok(NULL, ", \t\n");
+
+        m1 = ops1[0] ? detect_addressing_mode(ops1[0]) : -1;
+        m2 = ops1[1] ? detect_addressing_mode(ops1[1]) : -1;
+        if (m1 == 3 && m2 == 3) {
+            extra += 1;
+        } else {
+            if (m1 >= 0) extra++;
+            if (m2 >= 0) extra++;
+        }
+        cur = cur->next;
+    }
+
+    /* 2) Shift data symbol addresses */
+    for (sym = symbol_table_head; sym; sym = sym->next) {
+        if (sym->is_data) {
+            sym->address += extra;
+        }
+    }
+    /* Shift existing data words in memory[] */
+    for (i = 100; i < memory_counter; i++) {
+        if (!memory[i].is_code) {
+            memory[i].address += extra;
+        }
+    }
+
+    /* 3) Backup old memory */
+    memcpy(temp, memory, sizeof(memory));
+
+    /* 4) Rebuild code words with extra operand words */
+    new_cnt = 100;
+    cur     = instruction_head;
+    while (cur) {
+        /* copy primary instruction word */
+        memory[new_cnt]         = temp[cur->address];
+        memory[new_cnt].address = new_cnt;
+        new_cnt++;
+
+        /* parse operands again */
+        strncpy(buf2, cur->line, MAX_LINE_LENGTH);
+        buf2[MAX_LINE_LENGTH-1] = '\0';
+        tok2     = strtok(buf2, " \t\n");  /* skip opcode */
+        ops2[0]  = strtok(NULL, ", \t\n");
+        ops2[1]  = strtok(NULL, ", \t\n");
+        modes[0] = ops2[0] ? detect_addressing_mode(ops2[0]) : -1;
+        modes[1] = ops2[1] ? detect_addressing_mode(ops2[1]) : -1;
+
+        /* if both operands are registers, pack into one word */
+        if (modes[0] == 3 && modes[1] == 3) {
+            int r1 = ops2[0][1] - '0';
+            int r2 = ops2[1][1] - '0';
+            memory[new_cnt].address = new_cnt;
+            memory[new_cnt].value   = (r1 << 4) | r2;
+            memory[new_cnt].is_code = 1;
+            new_cnt++;
+        } else {
+            /* otherwise generate one word per operand */
+            for (k = 0; k < 2; k++) {
+                if (modes[k] < 0) continue;
+                if (modes[k] == 0) {           /* immediate */
+                    val = atoi(ops2[k] + 1);
+                } else if (modes[k] == 1) {    /* direct */
+                    sym = find_symbol(ops2[k]);
+                    val = sym ? sym->address : 0;
+                } else if (modes[k] == 2) {    /* index */
+                    char lbl[MAX_LINE_LENGTH];
+                    int reg;
+                    sscanf(ops2[k], "%[^[][%*c%d%*c]", lbl, &reg);
+                    sym = find_symbol(lbl);
+                    /* write base address word */
+                    memory[new_cnt].address = new_cnt;
+                    memory[new_cnt].value   = sym ? sym->address : 0;
+                    memory[new_cnt].is_code = 1;
+                    new_cnt++;
+                    val = reg;
+                } else {                       /* single register */
+                    val = ops2[k][1] - '0';
+                }
+                memory[new_cnt].address = new_cnt;
+                memory[new_cnt].value   = val;
+                memory[new_cnt].is_code = 1;
+                new_cnt++;
+            }
+        }
+        cur = cur->next;
+    }
+
+    /* 5) Append data words after code */
+    for (i = 100; i < memory_counter; i++) {
+        if (!temp[i].is_code) {
+            memory[new_cnt]         = temp[i];
+            memory[new_cnt].address = new_cnt;
+            new_cnt++;
+        }
+    }
+
+    /* 6) Update counter */
+    memory_counter = new_cnt;
 }
+
+
 
 /* Goes over the file again and handles .entry lines */
 void mark_entries(FILE *fp) {
@@ -933,11 +1058,27 @@ void write_ext_file(const char *filename) {
     fclose(ext_file);
 }
 
+/* Convert a 12-bit word into 5 “base-4” chars: a=00, b=01, c=10, d=11 */
+void word_to_base4(int word, char out[6]) {
+    int i;
+    /* We only encode the lower 12 bits: bits 0–11 */
+    /* We split into 5 groups of 2 bits each: group 0 = bits 8–9, ..., group 4 = bits 0–1 */
+    for (i = 0; i < 5; i++) {
+        int shift = (4 - i) * 2;
+        int two_bits = (word >> shift) & 0x3; /* extract 2 bits */
+        /* map 0→'a', 1→'b', 2→'c', 3→'d' */
+        out[i] = (char)('a' + two_bits);
+    }
+    out[5] = '\0';
+}
+
+
 /* Creates the .ob file containing the memory image (code + data) */
 void create_ob_file(const char *original_filename) {
     FILE *ob_fp;
     char ob_filename[FILENAME_MAX];
     int i, instruction_count = 0, data_count = 0;
+    char base4[6];
 
     /* Count instructions and data */
     for (i = 100; i < memory_counter; i++) {
@@ -947,34 +1088,43 @@ void create_ob_file(const char *original_filename) {
             data_count++;
     }
 
-    /* Create .ob file name */
+    /* Construct .ob filename */
     strncpy(ob_filename, original_filename, FILENAME_MAX);
     ob_filename[FILENAME_MAX - 1] = '\0';
-    char *dot = strrchr(ob_filename, '.');
-    if (dot != NULL) {
-        strcpy(dot, ".ob");
-    } else {
-        strcat(ob_filename, ".ob");
+    {
+        char *dot = strrchr(ob_filename, '.');
+        if (dot) strcpy(dot, ".ob");
+        else    strcat(ob_filename, ".ob");
     }
 
-    /* Open file for writing */
     ob_fp = fopen(ob_filename, "w");
     if (!ob_fp) {
-        printf("Error: could not create %s file.\n", ob_filename);
+        fprintf(stderr, "Error: could not create %s file.\n", ob_filename);
         return;
     }
 
-    /* Write header line: number of code and data words */
+    /* Header: code words count and data words count */
     fprintf(ob_fp, "%d %d\n", instruction_count, data_count);
 
-    /* Write memory words */
+    /* Write each memory word in base-4 encoding */
     for (i = 100; i < memory_counter; i++) {
-        fprintf(ob_fp, "%03d %d\n", memory[i].address, memory[i].value);
+        word_to_base4(memory[i].value, base4);
+        fprintf(ob_fp, "%03d %s\n", memory[i].address, base4);
     }
 
     fclose(ob_fp);
 }
 
+
+/* Perform the second pass: mark .entry labels, and write .ent, .ext and .ob files */
+void second_pass(FILE *fp, const char *orig_filename) {
+    rewind(fp);
+    mark_entries(fp);
+    generate_extra_operand_words();
+    create_entry_file(orig_filename);
+    write_ext_file(orig_filename);
+    create_ob_file(orig_filename);
+}
 
 
 void print_memory() {

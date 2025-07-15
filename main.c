@@ -412,99 +412,162 @@ int encode_instruction(const char *line) {
 
 
 void parse_data_directive(const char *line_ptr) {
-    printf("Parsing directive: [%s]\n", line_ptr);
-
     char buffer[MAX_LINE_LENGTH];
     char *token;
-    int i;
 
-    /* נתקדם אחרי .data או .string */
-    while (isspace(*line_ptr)) line_ptr++;
+    /* Skip leading whitespace */
+    while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
+    /* .extern directive */
     if (strncmp(line_ptr, ".extern", 7) == 0) {
         line_ptr += 7;
-        while (isspace(*line_ptr)) line_ptr++;
+        while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
-        /* קרא את שם הסימול החיצוני */
         char label_name[MAX_LINE_LENGTH];
-        sscanf(line_ptr, "%s", label_name);
-
-        /* צור סמל חדש */
-        Symbol *new_sym = (Symbol *)malloc(sizeof(Symbol));
-        if (!new_sym) {
-            printf("Memory allocation error in .extern\n");
+        if (sscanf(line_ptr, "%s", label_name) != 1) {
+            fprintf(stderr, "Error: invalid .extern syntax\n");
             return;
         }
 
+        Symbol *new_sym = malloc(sizeof(Symbol));
+        if (!new_sym) {
+            fprintf(stderr, "Error: memory allocation failed in .extern\n");
+            return;
+        }
         strcpy(new_sym->name, label_name);
-        new_sym->address = 0; /* חיצוני – לא ידוע */
-        new_sym->is_data = 0;
-        new_sym->is_external = 1;
-        new_sym->is_entry = 0;
-        new_sym->next = symbol_table_head;
-        symbol_table_head = new_sym;
-
-        return; /* לא ממשיכים הלאה */
+        new_sym->address     = 0;
+        new_sym->is_data     = false;
+        new_sym->is_external = true;
+        new_sym->is_entry    = false;
+        new_sym->next        = symbol_table_head;
+        symbol_table_head    = new_sym;
+        return;
     }
 
-    /* נבדוק איזו הנחיה זו */
+    /* .data directive */
     if (strncmp(line_ptr, ".data", 5) == 0) {
         line_ptr += 5;
-        while (isspace(*line_ptr)) line_ptr++;
+        while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
-        /* נעתיק את החלק עם המספרים */
         strncpy(buffer, line_ptr, MAX_LINE_LENGTH);
-        buffer[MAX_LINE_LENGTH - 1] = '\0';
+        buffer[MAX_LINE_LENGTH-1] = '\0';
 
         token = strtok(buffer, ", \t\n");
-        while (token != NULL) {
+        while (token) {
             int value = atoi(token);
-
-            if (memory_counter < MAX_MEMORY) {
-                memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = value;
-                memory[memory_counter].is_code = 0; /* זה data */
-                memory_counter++;
-            } else {
-                printf("Error: memory overflow in .data directive.\n");
+            if (memory_counter >= MAX_MEMORY) {
+                fprintf(stderr, "Error: memory overflow in .data\n");
+                return;
             }
-
+            memory[memory_counter].address = memory_counter;
+            memory[memory_counter].value   = value;
+            memory[memory_counter].is_code = 0;
+            memory_counter++;
             token = strtok(NULL, ", \t\n");
         }
+        return;
+    }
 
-    } else if (strncmp(line_ptr, ".string", 7) == 0) {
+    /* .string directive */
+    if (strncmp(line_ptr, ".string", 7) == 0) {
         line_ptr += 7;
-        while (isspace(*line_ptr)) line_ptr++;
+        while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
         if (*line_ptr != '"') {
-            printf("Error: invalid string format.\n");
+            fprintf(stderr, "Error: invalid .string format\n");
             return;
         }
-
-        line_ptr++; /* דילוג על גרשיים */
+        line_ptr++;  /* skip opening quote */
 
         while (*line_ptr && *line_ptr != '"') {
-            if (memory_counter < MAX_MEMORY) {
+            if (memory_counter >= MAX_MEMORY) {
+                fprintf(stderr, "Error: memory overflow in .string\n");
+                return;
+            }
+            memory[memory_counter].address = memory_counter;
+            memory[memory_counter].value   = (int)*line_ptr;
+            memory[memory_counter].is_code = 0;
+            memory_counter++;
+            line_ptr++;
+        }
+        if (*line_ptr != '"') {
+            fprintf(stderr, "Error: missing closing quote in .string\n");
+            return;
+        }
+        /* add null terminator */
+        if (memory_counter >= MAX_MEMORY) {
+            fprintf(stderr, "Error: memory overflow in .string\n");
+            return;
+        }
+        memory[memory_counter].address = memory_counter;
+        memory[memory_counter].value   = 0;
+        memory[memory_counter].is_code = 0;
+        memory_counter++;
+        return;
+    }
+
+    /* .mat directive */
+    if (strncmp(line_ptr, ".mat", 4) == 0) {
+        int rows, cols;
+        /* parse dimensions */
+        if (sscanf(line_ptr + 4, " [%d][%d]", &rows, &cols) != 2 || rows <= 0 || cols <= 0) {
+            fprintf(stderr, "Error: invalid .mat dimensions\n");
+            return;
+        }
+        /* move past the closing ']' */
+        char *p = strchr(line_ptr, ']');
+        if (!p || !(p = strchr(p + 1, ']'))) {
+            fprintf(stderr, "Error: malformed .mat directive\n");
+            return;
+        }
+        p++;  /* now at initializer list or end */
+
+        while (isspace((unsigned char)*p)) p++;
+
+        int total = rows * cols;
+        int init_count = 0;
+
+        if (*p && *p != '\n') {
+            strncpy(buffer, p, MAX_LINE_LENGTH);
+            buffer[MAX_LINE_LENGTH-1] = '\0';
+            token = strtok(buffer, ", \t\n");
+            while (token && init_count < total) {
+                int value = atoi(token);
+                if (memory_counter >= MAX_MEMORY) {
+                    fprintf(stderr, "Error: memory overflow in .mat\n");
+                    return;
+                }
                 memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = (int)(*line_ptr);
+                memory[memory_counter].value   = value;
                 memory[memory_counter].is_code = 0;
                 memory_counter++;
-                line_ptr++;
-            } else {
-                printf("Error: memory overflow in .string directive.\n");
+                init_count++;
+                token = strtok(NULL, ", \t\n");
+            }
+            if (token) {
+                fprintf(stderr, "Error: too many initializers for .mat\n");
                 return;
             }
         }
-
-        /* אחרי סוגר " להוסיף null (0) */
-        if (memory_counter < MAX_MEMORY) {
+        /* zero-fill remaining */
+        while (init_count < total) {
+            if (memory_counter >= MAX_MEMORY) {
+                fprintf(stderr, "Error: memory overflow in .mat\n");
+                return;
+            }
             memory[memory_counter].address = memory_counter;
-            memory[memory_counter].value = 0;
+            memory[memory_counter].value   = 0;
             memory[memory_counter].is_code = 0;
             memory_counter++;
+            init_count++;
         }
+        return;
     }
+
+    /* unknown directive */
+    fprintf(stderr, "Error: unrecognized directive in parse_data_directive\n");
 }
+
 
 void first_pass(FILE *fp) {
     char line[MAX_LINE_LENGTH];

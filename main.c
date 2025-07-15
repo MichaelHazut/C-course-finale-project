@@ -584,15 +584,6 @@ void first_pass(FILE *fp) {
     }
 }
 
-/* Perform the second pass: mark .entry labels, and write .ent, .ext and .ob files */
-void second_pass(FILE *fp, const char *orig_filename) {
-    rewind(fp);                  /* go back to start of .am file */
-    mark_entries(fp);            /* mark entry symbols */
-    create_entry_file(orig_filename);
-    write_ext_file(orig_filename);
-    create_ob_file(orig_filename);
-}
-
 /* Goes over the file again and handles .entry lines */
 void mark_entries(FILE *fp) {
     char line[MAX_LINE_LENGTH];
@@ -814,7 +805,6 @@ void print_symbol_table() {
     }
 }
 
-
 int main(int argc, char *argv[]) {
     FILE *fp;
     char line[MAX_LINE_LENGTH];
@@ -859,12 +849,46 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Step 5: First Pass - build symbol table and initial code/data */
+    /* Step 5: First Pass - Print full contents */
+    printf("\n1) Full contents of the file:\n");
+    while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        printf("%s", line);
+    }
+
+    /* Step 6: Second Pass - Analyze each line */
+    rewind(fp);
+    printf("\n\n\n2) Line analysis:");
+    while (fgets(line, MAX_LINE_LENGTH, fp)) {
+        printf("\n>> Line: | %s", line);
+
+        bool has_label = is_label(line);
+        bool has_directive = is_directive(line);
+        bool has_instruction = is_instruction(line);
+
+        if (has_label) {
+            printf("=> Type: Label\n");
+        }
+        if (has_directive) {
+            printf("=> Type: Directive\n");
+        }
+        if (has_instruction) {
+            printf("=> Type: Instruction\n");
+            parse_instruction(line);
+        }
+        if (!has_label && !has_directive && !has_instruction) {
+            printf("=> Type: Unknown or empty line\n");
+        }
+    }
+
+    /* Step 7: Assemble */
+    printf("\n\n\n2) Line analysis:");
     rewind(fp);
     first_pass(fp);
-
-    /* Step 6: Second Pass - finalize entries, externs, and output files */
-    second_pass(fp, argv[1]);
+    rewind(fp);
+    mark_entries(fp);
+    create_entry_file(argv[1]);
+    write_ext_file(argv[1]);
+    create_ob_file(argv[1]);
 
     /* Debug info */
     print_memory();

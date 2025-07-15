@@ -911,10 +911,40 @@ void remove_macro_decls_file(const char *in_filename, const char *out_filename) 
     fclose(fout);
 }
 
+/* Remove spaces immediately before or after commas -> .t01a */
+void remove_spaces_next_to_comma_file(const char *in_filename, const char *out_filename) {
+    FILE *fin = fopen(in_filename, "r");
+    FILE *fout = fopen(out_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    if (!fin || !fout) {
+        fprintf(stderr, "Error: cannot open %s or %s for comma-spacing\n", in_filename, out_filename);
+        return;
+    }
+    while (fgets(line, MAX_LINE_LENGTH, fin)) {
+        char buf[MAX_LINE_LENGTH];
+        int r = 0, w = 0;
+        char c;
+        while ((c = line[r++]) && c != '\n') {
+            if (c == ' ' && line[r] == ',') continue;
+            if (c == ',' && line[r] == ' ') {
+                buf[w++] = ',';
+                r++;
+                continue;
+            }
+            buf[w++] = c;
+        }
+        buf[w] = '\0';
+        fprintf(fout, "%s\n", buf);
+    }
+    fclose(fin);
+    fclose(fout);
+}
+
 
 int main(int argc, char *argv[]) {
     FILE *fp;
     char t01_filename[FILENAME_MAX];
+    char t01a_filename[FILENAME_MAX];  /* after comma-cleaning */
     char t02_filename[FILENAME_MAX];
     char pre_filename[FILENAME_MAX];
     char am_filename[FILENAME_MAX];
@@ -927,41 +957,50 @@ int main(int argc, char *argv[]) {
 
     /* build .t01 name */
     strncpy(t01_filename, argv[1], FILENAME_MAX);
-    t01_filename[FILENAME_MAX - 1] = '\0';
+    t01_filename[FILENAME_MAX-1] = '\0';
     dot = strrchr(t01_filename, '.');
     if (dot) strcpy(dot, ".t01"); else strcat(t01_filename, ".t01");
 
+    /* build .t01a name */
+    strncpy(t01a_filename, t01_filename, FILENAME_MAX);
+    t01a_filename[FILENAME_MAX-1] = '\0';
+    dot = strrchr(t01a_filename, '.');
+    if (dot) strcpy(dot, ".t01a"); else strcat(t01a_filename, ".t01a");
+
     /* build .t02 name */
-    strncpy(t02_filename, t01_filename, FILENAME_MAX);
-    t02_filename[FILENAME_MAX - 1] = '\0';
+    strncpy(t02_filename, t01a_filename, FILENAME_MAX);
+    t02_filename[FILENAME_MAX-1] = '\0';
     dot = strrchr(t02_filename, '.');
     if (dot) strcpy(dot, ".t02"); else strcat(t02_filename, ".t02");
 
     /* build .pre name */
     strncpy(pre_filename, argv[1], FILENAME_MAX);
-    pre_filename[FILENAME_MAX - 1] = '\0';
+    pre_filename[FILENAME_MAX-1] = '\0';
     dot = strrchr(pre_filename, '.');
     if (dot) strcpy(dot, ".pre"); else strcat(pre_filename, ".pre");
 
     /* build .am name */
     strncpy(am_filename, argv[1], FILENAME_MAX);
-    am_filename[FILENAME_MAX - 1] = '\0';
+    am_filename[FILENAME_MAX-1] = '\0';
     dot = strrchr(am_filename, '.');
     if (dot) strcpy(dot, ".am"); else strcat(am_filename, ".am");
 
     /* Step 1: Remove extra spaces -> .t01 */
     remove_extra_spaces_file(argv[1], t01_filename);
 
-    /* Step 2: Strip out macro definitions -> .t02 */
-    remove_macro_decls_file(t01_filename, t02_filename);
+    /* Step 1b: Remove spaces around commas -> .t01a */
+    remove_spaces_next_to_comma_file(t01_filename, t01a_filename);
 
-    /* Step 3: Preprocessor (collect macro definitions) -> .pre */
+    /* Step 2: Strip out macro definitions -> .t02 */
+    remove_macro_decls_file(t01a_filename, t02_filename);
+
+    /* Step 3: Preprocessor (collect definitions) -> .pre */
     preprocess_file(t02_filename, pre_filename);
 
     /* Step 4: Expand macros -> .am */
     expand_macros(pre_filename, am_filename);
 
-    /* Step 5: Open .am and First Pass */
+    /* Step 5: First Pass */
     fp = fopen(am_filename, "r");
     if (!fp) {
         perror("Error opening .am file");
@@ -969,14 +1008,14 @@ int main(int argc, char *argv[]) {
     }
     first_pass(fp);
 
-    /* Step 6: Second Pass and outputs */
+    /* Step 6: Second Pass and output files */
     rewind(fp);
     mark_entries(fp);
     create_entry_file(argv[1]);
     write_ext_file(argv[1]);
     create_ob_file(argv[1]);
 
-    /* Debug output */
+    /* Debug prints */
     print_memory();
     print_symbol_table();
 

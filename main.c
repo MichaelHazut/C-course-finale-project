@@ -11,6 +11,20 @@
 #define true 1
 #define false 0
 
+/* bit-masks for addressing modes */
+#define MODE_IMM (1<<0)
+#define MODE_DIR (1<<1)
+#define MODE_IDX (1<<2)
+#define MODE_REG (1<<3)
+
+/* Information for each opcode */
+typedef struct {
+    const char *name;
+    int code;
+    int num_operands;
+    int src_mask;   /* which modes allowed for src */
+    int dst_mask;   /* which modes allowed for dst */
+} OpcodeInfo;
 
 /* Represents a line in memory (instruction or data) */
 typedef struct {
@@ -49,6 +63,38 @@ typedef struct Macro {
     struct Macro *next;
 } Macro;
 
+/* static table of all 16 opcodes */
+static const OpcodeInfo opcode_table[] = {
+    {"mov", 0, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_DIR|MODE_IDX|MODE_REG},
+    {"cmp", 1, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG},
+    {"add", 2, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_DIR|MODE_IDX|MODE_REG},
+    {"sub", 3, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_DIR|MODE_IDX|MODE_REG},
+    {"not", 4, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"clr", 5, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"lea", 6, 2, MODE_DIR|MODE_IDX,       MODE_DIR|MODE_IDX|MODE_REG},
+    {"inc", 7, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"dec", 8, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"jmp", 9, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"bne",10, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"jsr",11, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"red",12, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"prn",13, 1, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, 0},
+    {"rts",14, 0, 0,                        0},
+    {"stop",15,0, 0,                        0}
+};
+static const int OPCODE_COUNT = sizeof(opcode_table)/sizeof(opcode_table[0]);
+
+/* Lookup an OpcodeInfo by name, or return NULL */
+const OpcodeInfo* find_opcode(const char *name) {
+    int i;
+    for (i = 0; i < OPCODE_COUNT; i++) {
+        if (strcmp(opcode_table[i].name, name) == 0)
+            return &opcode_table[i];
+    }
+    return NULL;
+}
+
+
 /* Macro table */
 Macro *macro_table = NULL;
 
@@ -65,6 +111,69 @@ Symbol *symbol_table_head = NULL;
 InstructionNode *instruction_head = NULL;
 InstructionNode *instruction_tail = NULL;
 
+/* Implementation */
+Symbol *find_symbol(const char *name) {
+    Symbol *cur = symbol_table_head;
+    while (cur) {
+        if (strcmp(cur->name, name) == 0) {
+            return cur;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+/* Validate operand count and addressing modes for one instruction */
+bool validate_instruction(const char *line, int line_num, const char *file_name) {
+    char buf[MAX_LINE_LENGTH];
+    strncpy(buf, line, MAX_LINE_LENGTH);
+    buf[MAX_LINE_LENGTH-1] = '\0';
+
+    /* strip label */
+    char *instr = strchr(buf, ':');
+    if (instr) instr++;
+    else instr = buf;
+
+    /* parse opcode and operands */
+    char *opc = strtok(instr, " \t\n");
+    if (!opc) return true;  /* nothing to do */
+
+    const OpcodeInfo *info = find_opcode(opc);
+    if (!info) {
+        fprintf(stderr, "%s:%d: error: unknown opcode '%s'\n", file_name, line_num, opc);
+        return false;
+    }
+
+    /* count operands */
+    char *op1 = strtok(NULL, ", \t\n");
+    char *op2 = strtok(NULL, ", \t\n");
+    int count = (op2 ? 2 : (op1 ? 1 : 0));
+    if (count != info->num_operands) {
+        fprintf(stderr, "%s:%d: error: '%s' expects %d operands, got %d\n",
+                file_name, line_num, opc, info->num_operands, count);
+        return false;
+    }
+
+    /* check addressing modes */
+    if (op1) {
+        int m1 = detect_addressing_mode(op1);
+        if (!(info->src_mask & (1<<m1))) {
+            fprintf(stderr, "%s:%d: error: addressing mode %d not allowed for source of '%s'\n",
+                    file_name, line_num, m1, opc);
+            return false;
+        }
+    }
+    if (op2) {
+        int m2 = detect_addressing_mode(op2);
+        if (!(info->dst_mask & (1<<m2))) {
+            fprintf(stderr, "%s:%d: error: addressing mode %d not allowed for dest of '%s'\n",
+                    file_name, line_num, m2, opc);
+            return false;
+        }
+    }
+    return true;
+}
+
 
 void add_macro(const char *name, const char *content) {
     Macro *new_macro = (Macro *)malloc(sizeof(Macro));
@@ -79,6 +188,15 @@ void add_macro(const char *name, const char *content) {
     macro_table = new_macro;
 }
 
+bool macro_exists(const char *name) {
+    Macro *cur = macro_table;
+    while (cur) {
+        if (strcmp(cur->name, name) == 0) return true;
+        cur = cur->next;
+    }
+    return false;
+}
+
 
 void preprocess_file(const char *input_filename, const char *output_filename) {
     FILE *input_fp = fopen(input_filename, "r");
@@ -86,32 +204,48 @@ void preprocess_file(const char *input_filename, const char *output_filename) {
     char line[MAX_LINE_LENGTH];
     char macro_name[MAX_LINE_LENGTH];
     char macro_content[MAX_LINE_LENGTH * 10];
-    int in_macro = 0;
+    bool in_macro = false;
 
     if (!input_fp || !output_fp) {
-        printf("Error: failed to open file(s).\n");
+        fprintf(stderr, "Error: failed to open %s or %s\n", input_filename, output_filename);
         return;
     }
 
     while (fgets(line, MAX_LINE_LENGTH, input_fp)) {
+        /* התחלת הגדרת מאקרו */
         if (strncmp(line, "macro", 5) == 0) {
-            in_macro = 1;
+            if (in_macro) {
+                fprintf(stderr, "%s: error: nested macro definitions not allowed\n", input_filename);
+                return;
+            }
             sscanf(line, "macro %s", macro_name);
-            macro_content[0] = '\0';  /* Clear macro content buffer */
+            if (macro_exists(macro_name)) {
+                fprintf(stderr, "%s: error: duplicate macro '%s'\n", input_filename, macro_name);
+                return;
+            }
+            in_macro = true;
+            macro_content[0] = '\0';
+            continue;
+        }
+
+        /* סוף הגדרת מאקרו */
+        if (in_macro && strncmp(line, "endmacro", 8) == 0) {
+            in_macro = false;
+            add_macro(macro_name, macro_content);
             continue;
         }
 
         if (in_macro) {
-            if (strncmp(line, "endmacro", 8) == 0) {
-                in_macro = 0;
-                add_macro(macro_name, macro_content);
-                continue;
-            }
-            strcat(macro_content, "\t");
-            strcat(macro_content, line);  /* Append line to macro content */
+            /* בתוך מאקרו – מצטבר לתוכן */
+            strcat(macro_content, line);
         } else {
-            fprintf(output_fp, "%s", line);  /* Regular line, write as-is */
+            /* מחוץ למאקרו – כותב לשורה ב־.pre */
+            fprintf(output_fp, "%s", line);
         }
+    }
+
+    if (in_macro) {
+        fprintf(stderr, "%s: error: missing endmacro for '%s'\n", input_filename, macro_name);
     }
 
     fclose(input_fp);
@@ -387,101 +521,164 @@ int encode_instruction(const char *line) {
 
 
 void parse_data_directive(const char *line_ptr) {
-    printf("Parsing directive: [%s]\n", line_ptr);
-
     char buffer[MAX_LINE_LENGTH];
     char *token;
-    int i;
 
-    /* נתקדם אחרי .data או .string */
-    while (isspace(*line_ptr)) line_ptr++;
+    /* Skip leading whitespace */
+    while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
+    /* .extern directive */
     if (strncmp(line_ptr, ".extern", 7) == 0) {
         line_ptr += 7;
-        while (isspace(*line_ptr)) line_ptr++;
+        while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
-        /* קרא את שם הסימול החיצוני */
         char label_name[MAX_LINE_LENGTH];
-        sscanf(line_ptr, "%s", label_name);
-
-        /* צור סמל חדש */
-        Symbol *new_sym = (Symbol *)malloc(sizeof(Symbol));
-        if (!new_sym) {
-            printf("Memory allocation error in .extern\n");
+        if (sscanf(line_ptr, "%s", label_name) != 1) {
+            fprintf(stderr, "Error: invalid .extern syntax\n");
             return;
         }
 
+        Symbol *new_sym = malloc(sizeof(Symbol));
+        if (!new_sym) {
+            fprintf(stderr, "Error: memory allocation failed in .extern\n");
+            return;
+        }
         strcpy(new_sym->name, label_name);
-        new_sym->address = 0; /* חיצוני – לא ידוע */
-        new_sym->is_data = 0;
-        new_sym->is_external = 1;
-        new_sym->is_entry = 0;
-        new_sym->next = symbol_table_head;
-        symbol_table_head = new_sym;
-
-        return; /* לא ממשיכים הלאה */
+        new_sym->address     = 0;
+        new_sym->is_data     = false;
+        new_sym->is_external = true;
+        new_sym->is_entry    = false;
+        new_sym->next        = symbol_table_head;
+        symbol_table_head    = new_sym;
+        return;
     }
 
-    /* נבדוק איזו הנחיה זו */
+    /* .data directive */
     if (strncmp(line_ptr, ".data", 5) == 0) {
         line_ptr += 5;
-        while (isspace(*line_ptr)) line_ptr++;
+        while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
-        /* נעתיק את החלק עם המספרים */
         strncpy(buffer, line_ptr, MAX_LINE_LENGTH);
-        buffer[MAX_LINE_LENGTH - 1] = '\0';
+        buffer[MAX_LINE_LENGTH-1] = '\0';
 
         token = strtok(buffer, ", \t\n");
-        while (token != NULL) {
+        while (token) {
             int value = atoi(token);
-
-            if (memory_counter < MAX_MEMORY) {
-                memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = value;
-                memory[memory_counter].is_code = 0; /* זה data */
-                memory_counter++;
-            } else {
-                printf("Error: memory overflow in .data directive.\n");
+            if (memory_counter >= MAX_MEMORY) {
+                fprintf(stderr, "Error: memory overflow in .data\n");
+                return;
             }
-
+            memory[memory_counter].address = memory_counter;
+            memory[memory_counter].value   = value;
+            memory[memory_counter].is_code = 0;
+            memory_counter++;
             token = strtok(NULL, ", \t\n");
         }
+        return;
+    }
 
-    } else if (strncmp(line_ptr, ".string", 7) == 0) {
+    /* .string directive */
+    if (strncmp(line_ptr, ".string", 7) == 0) {
         line_ptr += 7;
-        while (isspace(*line_ptr)) line_ptr++;
+        while (isspace((unsigned char)*line_ptr)) line_ptr++;
 
         if (*line_ptr != '"') {
-            printf("Error: invalid string format.\n");
+            fprintf(stderr, "Error: invalid .string format\n");
             return;
         }
-
-        line_ptr++; /* דילוג על גרשיים */
+        line_ptr++;  /* skip opening quote */
 
         while (*line_ptr && *line_ptr != '"') {
-            if (memory_counter < MAX_MEMORY) {
+            if (memory_counter >= MAX_MEMORY) {
+                fprintf(stderr, "Error: memory overflow in .string\n");
+                return;
+            }
+            memory[memory_counter].address = memory_counter;
+            memory[memory_counter].value   = (int)*line_ptr;
+            memory[memory_counter].is_code = 0;
+            memory_counter++;
+            line_ptr++;
+        }
+        if (*line_ptr != '"') {
+            fprintf(stderr, "Error: missing closing quote in .string\n");
+            return;
+        }
+        /* add null terminator */
+        if (memory_counter >= MAX_MEMORY) {
+            fprintf(stderr, "Error: memory overflow in .string\n");
+            return;
+        }
+        memory[memory_counter].address = memory_counter;
+        memory[memory_counter].value   = 0;
+        memory[memory_counter].is_code = 0;
+        memory_counter++;
+        return;
+    }
+
+    /* .mat directive */
+    if (strncmp(line_ptr, ".mat", 4) == 0) {
+        int rows, cols;
+        /* parse dimensions */
+        if (sscanf(line_ptr + 4, " [%d][%d]", &rows, &cols) != 2 || rows <= 0 || cols <= 0) {
+            fprintf(stderr, "Error: invalid .mat dimensions\n");
+            return;
+        }
+        /* move past the closing ']' */
+        char *p = strchr(line_ptr, ']');
+        if (!p || !(p = strchr(p + 1, ']'))) {
+            fprintf(stderr, "Error: malformed .mat directive\n");
+            return;
+        }
+        p++;  /* now at initializer list or end */
+
+        while (isspace((unsigned char)*p)) p++;
+
+        int total = rows * cols;
+        int init_count = 0;
+
+        if (*p && *p != '\n') {
+            strncpy(buffer, p, MAX_LINE_LENGTH);
+            buffer[MAX_LINE_LENGTH-1] = '\0';
+            token = strtok(buffer, ", \t\n");
+            while (token && init_count < total) {
+                int value = atoi(token);
+                if (memory_counter >= MAX_MEMORY) {
+                    fprintf(stderr, "Error: memory overflow in .mat\n");
+                    return;
+                }
                 memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = (int)(*line_ptr);
+                memory[memory_counter].value   = value;
                 memory[memory_counter].is_code = 0;
                 memory_counter++;
-                line_ptr++;
-            } else {
-                printf("Error: memory overflow in .string directive.\n");
+                init_count++;
+                token = strtok(NULL, ", \t\n");
+            }
+            if (token) {
+                fprintf(stderr, "Error: too many initializers for .mat\n");
                 return;
             }
         }
-
-        /* אחרי סוגר " להוסיף null (0) */
-        if (memory_counter < MAX_MEMORY) {
+        /* zero-fill remaining */
+        while (init_count < total) {
+            if (memory_counter >= MAX_MEMORY) {
+                fprintf(stderr, "Error: memory overflow in .mat\n");
+                return;
+            }
             memory[memory_counter].address = memory_counter;
-            memory[memory_counter].value = 0;
+            memory[memory_counter].value   = 0;
             memory[memory_counter].is_code = 0;
             memory_counter++;
+            init_count++;
         }
+        return;
     }
+
+    /* unknown directive */
+    fprintf(stderr, "Error: unrecognized directive in parse_data_directive\n");
 }
 
-void first_pass(FILE *fp) {
+
+void first_pass(FILE *fp, const char *filename) {
     char line[MAX_LINE_LENGTH];
     char *line_ptr;
     int line_number = 0;
@@ -492,10 +689,7 @@ void first_pass(FILE *fp) {
         Symbol *new_sym;
         InstructionNode *new_instr;
         char label_name[MAX_LINE_LENGTH];
-
-        int is_label_line;
-        int is_dir;
-        int is_instr;
+        int is_label_line, is_dir, is_instr;
 
         line_number++;
 
@@ -504,64 +698,67 @@ void first_pass(FILE *fp) {
             continue;
         }
 
-        /* Start from the beginning of line */
+        /* Trim leading whitespace */
         line_ptr = line;
-
-        /* Trim leading spaces */
-        while (isspace(*line_ptr)) {
+        while (isspace((unsigned char)*line_ptr)) {
             line_ptr++;
         }
 
         is_label_line = is_label(line_ptr);
-        is_dir = is_directive(line_ptr);
-        is_instr = is_instruction(line_ptr);
+        is_dir        = is_directive(line_ptr);
+        is_instr      = is_instruction(line_ptr);
 
-        /* If the line has a label, extract and register it */
+        /* Handle label definition */
         if (is_label_line) {
+            /* extract label name */
             sscanf(line_ptr, "%[^:]:", label_name);
 
-            new_sym = (Symbol *)malloc(sizeof(Symbol));
+            new_sym = malloc(sizeof(Symbol));
             if (!new_sym) {
-                printf("Memory allocation error at line %d\n", line_number);
+                fprintf(stderr, "%s:%d: error: memory allocation failed for symbol\n", filename, line_number);
                 continue;
             }
-
             strcpy(new_sym->name, label_name);
-            new_sym->address = memory_counter;
-            new_sym->is_entry = 0;
-            new_sym->is_external = 0;
-            new_sym->is_data = is_dir;
-            new_sym->next = symbol_table_head;
-            symbol_table_head = new_sym;
+            new_sym->address      = memory_counter;
+            new_sym->is_entry     = false;
+            new_sym->is_external  = false;
+            new_sym->is_data      = is_dir;
+            new_sym->next         = symbol_table_head;
+            symbol_table_head     = new_sym;
 
-            /* Move pointer after label */
+            /* advance pointer past label */
             line_ptr = strchr(line_ptr, ':');
-            if (line_ptr != NULL) {
+            if (line_ptr) {
                 line_ptr++;
-                while (isspace(*line_ptr)) {
+                while (isspace((unsigned char)*line_ptr)) {
                     line_ptr++;
                 }
             }
         }
 
-        /* If it's a directive (.data / .string) */
+        /* Handle directive (.data/.string/.extern/.entry/.mat) */
         if (is_dir) {
             parse_data_directive(line_ptr);
         }
-        /* If it's an instruction */
+        /* Handle instruction */
         else if (is_instr) {
-            new_instr = (InstructionNode *)malloc(sizeof(InstructionNode));
-            if (!new_instr) {
-                printf("Memory allocation error at line %d\n", line_number);
+            /* validate operand count and addressing modes */
+            if (!validate_instruction(line_ptr, line_number, filename)) {
                 continue;
             }
 
+            /* create new instruction node */
+            new_instr = malloc(sizeof(InstructionNode));
+            if (!new_instr) {
+                fprintf(stderr, "%s:%d: error: memory allocation failed for instruction node\n", filename, line_number);
+                continue;
+            }
             new_instr->address = memory_counter;
             strncpy(new_instr->line, line_ptr, MAX_LINE_LENGTH);
             new_instr->line[MAX_LINE_LENGTH - 1] = '\0';
             new_instr->next = NULL;
 
-            /* Add to instruction list */
+            /* append to instruction list */
             if (instruction_head == NULL) {
                 instruction_head = new_instr;
                 instruction_tail = new_instr;
@@ -570,28 +767,145 @@ void first_pass(FILE *fp) {
                 instruction_tail = new_instr;
             }
 
-            /* Store this instruction in memory[] as code */
+            /* encode primary instruction word */
             if (memory_counter < MAX_MEMORY) {
                 memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = encode_instruction(line_ptr);
+                memory[memory_counter].value   = encode_instruction(line_ptr);
                 memory[memory_counter].is_code = 1;
             } else {
-                printf("Error: memory overflow when adding instruction at line %d.\n", line_number);
+                fprintf(stderr, "%s:%d: error: memory overflow when adding instruction\n", filename, line_number);
             }
-
-            memory_counter++;  /* Instruction takes 1 memory word */
+            memory_counter++;
+        }
+        /* Unknown or invalid line */
+        else {
+            fprintf(stderr, "%s:%d: error: unrecognized statement\n", filename, line_number);
         }
     }
 }
 
-/* Perform the second pass: mark .entry labels, and write .ent, .ext and .ob files */
-void second_pass(FILE *fp, const char *orig_filename) {
-    rewind(fp);                  /* go back to start of .am file */
-    mark_entries(fp);            /* mark entry symbols */
-    create_entry_file(orig_filename);
-    write_ext_file(orig_filename);
-    create_ob_file(orig_filename);
+void generate_extra_operand_words(void) {
+    InstructionNode *cur;
+    Symbol *sym;
+    MemoryWord temp[MAX_MEMORY];
+    int extra, i, k, new_cnt;
+    char buf1[MAX_LINE_LENGTH];
+    char buf2[MAX_LINE_LENGTH];
+    char *tok1, *tok2;
+    char *ops1[2];
+    char *ops2[2];
+    int m1, m2, modes[2], val;
+
+    /* 1) Count how many extra words are needed */
+    extra = 0;
+    cur = instruction_head;
+    while (cur) {
+        /* tokenize operands */
+        strncpy(buf1, cur->line, MAX_LINE_LENGTH);
+        buf1[MAX_LINE_LENGTH-1] = '\0';
+        tok1 = strtok(buf1, " \t\n");      /* skip opcode */
+        ops1[0] = strtok(NULL, ", \t\n");
+        ops1[1] = strtok(NULL, ", \t\n");
+
+        m1 = ops1[0] ? detect_addressing_mode(ops1[0]) : -1;
+        m2 = ops1[1] ? detect_addressing_mode(ops1[1]) : -1;
+        if (m1 == 3 && m2 == 3) {
+            extra += 1;
+        } else {
+            if (m1 >= 0) extra++;
+            if (m2 >= 0) extra++;
+        }
+        cur = cur->next;
+    }
+
+    /* 2) Shift data symbol addresses */
+    for (sym = symbol_table_head; sym; sym = sym->next) {
+        if (sym->is_data) {
+            sym->address += extra;
+        }
+    }
+    /* Shift existing data words in memory[] */
+    for (i = 100; i < memory_counter; i++) {
+        if (!memory[i].is_code) {
+            memory[i].address += extra;
+        }
+    }
+
+    /* 3) Backup old memory */
+    memcpy(temp, memory, sizeof(memory));
+
+    /* 4) Rebuild code words with extra operand words */
+    new_cnt = 100;
+    cur     = instruction_head;
+    while (cur) {
+        /* copy primary instruction word */
+        memory[new_cnt]         = temp[cur->address];
+        memory[new_cnt].address = new_cnt;
+        new_cnt++;
+
+        /* parse operands again */
+        strncpy(buf2, cur->line, MAX_LINE_LENGTH);
+        buf2[MAX_LINE_LENGTH-1] = '\0';
+        tok2     = strtok(buf2, " \t\n");  /* skip opcode */
+        ops2[0]  = strtok(NULL, ", \t\n");
+        ops2[1]  = strtok(NULL, ", \t\n");
+        modes[0] = ops2[0] ? detect_addressing_mode(ops2[0]) : -1;
+        modes[1] = ops2[1] ? detect_addressing_mode(ops2[1]) : -1;
+
+        /* if both operands are registers, pack into one word */
+        if (modes[0] == 3 && modes[1] == 3) {
+            int r1 = ops2[0][1] - '0';
+            int r2 = ops2[1][1] - '0';
+            memory[new_cnt].address = new_cnt;
+            memory[new_cnt].value   = (r1 << 4) | r2;
+            memory[new_cnt].is_code = 1;
+            new_cnt++;
+        } else {
+            /* otherwise generate one word per operand */
+            for (k = 0; k < 2; k++) {
+                if (modes[k] < 0) continue;
+                if (modes[k] == 0) {           /* immediate */
+                    val = atoi(ops2[k] + 1);
+                } else if (modes[k] == 1) {    /* direct */
+                    sym = find_symbol(ops2[k]);
+                    val = sym ? sym->address : 0;
+                } else if (modes[k] == 2) {    /* index */
+                    char lbl[MAX_LINE_LENGTH];
+                    int reg;
+                    sscanf(ops2[k], "%[^[][%*c%d%*c]", lbl, &reg);
+                    sym = find_symbol(lbl);
+                    /* write base address word */
+                    memory[new_cnt].address = new_cnt;
+                    memory[new_cnt].value   = sym ? sym->address : 0;
+                    memory[new_cnt].is_code = 1;
+                    new_cnt++;
+                    val = reg;
+                } else {                       /* single register */
+                    val = ops2[k][1] - '0';
+                }
+                memory[new_cnt].address = new_cnt;
+                memory[new_cnt].value   = val;
+                memory[new_cnt].is_code = 1;
+                new_cnt++;
+            }
+        }
+        cur = cur->next;
+    }
+
+    /* 5) Append data words after code */
+    for (i = 100; i < memory_counter; i++) {
+        if (!temp[i].is_code) {
+            memory[new_cnt]         = temp[i];
+            memory[new_cnt].address = new_cnt;
+            new_cnt++;
+        }
+    }
+
+    /* 6) Update counter */
+    memory_counter = new_cnt;
 }
+
+
 
 /* Goes over the file again and handles .entry lines */
 void mark_entries(FILE *fp) {
@@ -744,11 +1058,27 @@ void write_ext_file(const char *filename) {
     fclose(ext_file);
 }
 
+/* Convert a 12-bit word into 5 “base-4” chars: a=00, b=01, c=10, d=11 */
+void word_to_base4(int word, char out[6]) {
+    int i;
+    /* We only encode the lower 12 bits: bits 0–11 */
+    /* We split into 5 groups of 2 bits each: group 0 = bits 8–9, ..., group 4 = bits 0–1 */
+    for (i = 0; i < 5; i++) {
+        int shift = (4 - i) * 2;
+        int two_bits = (word >> shift) & 0x3; /* extract 2 bits */
+        /* map 0→'a', 1→'b', 2→'c', 3→'d' */
+        out[i] = (char)('a' + two_bits);
+    }
+    out[5] = '\0';
+}
+
+
 /* Creates the .ob file containing the memory image (code + data) */
 void create_ob_file(const char *original_filename) {
     FILE *ob_fp;
     char ob_filename[FILENAME_MAX];
     int i, instruction_count = 0, data_count = 0;
+    char base4[6];
 
     /* Count instructions and data */
     for (i = 100; i < memory_counter; i++) {
@@ -758,34 +1088,43 @@ void create_ob_file(const char *original_filename) {
             data_count++;
     }
 
-    /* Create .ob file name */
+    /* Construct .ob filename */
     strncpy(ob_filename, original_filename, FILENAME_MAX);
     ob_filename[FILENAME_MAX - 1] = '\0';
-    char *dot = strrchr(ob_filename, '.');
-    if (dot != NULL) {
-        strcpy(dot, ".ob");
-    } else {
-        strcat(ob_filename, ".ob");
+    {
+        char *dot = strrchr(ob_filename, '.');
+        if (dot) strcpy(dot, ".ob");
+        else    strcat(ob_filename, ".ob");
     }
 
-    /* Open file for writing */
     ob_fp = fopen(ob_filename, "w");
     if (!ob_fp) {
-        printf("Error: could not create %s file.\n", ob_filename);
+        fprintf(stderr, "Error: could not create %s file.\n", ob_filename);
         return;
     }
 
-    /* Write header line: number of code and data words */
+    /* Header: code words count and data words count */
     fprintf(ob_fp, "%d %d\n", instruction_count, data_count);
 
-    /* Write memory words */
+    /* Write each memory word in base-4 encoding */
     for (i = 100; i < memory_counter; i++) {
-        fprintf(ob_fp, "%03d %d\n", memory[i].address, memory[i].value);
+        word_to_base4(memory[i].value, base4);
+        fprintf(ob_fp, "%03d %s\n", memory[i].address, base4);
     }
 
     fclose(ob_fp);
 }
 
+
+/* Perform the second pass: mark .entry labels, and write .ent, .ext and .ob files */
+void second_pass(FILE *fp, const char *orig_filename) {
+    rewind(fp);
+    mark_entries(fp);
+    generate_extra_operand_words();
+    create_entry_file(orig_filename);
+    write_ext_file(orig_filename);
+    create_ob_file(orig_filename);
+}
 
 
 void print_memory() {
@@ -815,62 +1154,174 @@ void print_symbol_table() {
 }
 
 
-int main(int argc, char *argv[]) {
-    FILE *fp;
+
+/* Step 1: Remove extra spaces and tabs, collapse to single spaces */
+void remove_extra_spaces_file(const char *in_filename, const char *out_filename) {
+    FILE *fin = fopen(in_filename, "r");
+    FILE *fout = fopen(out_filename, "w");
     char line[MAX_LINE_LENGTH];
-    char pre_filename[FILENAME_MAX];
-    char am_filename[FILENAME_MAX];
-
-    /* If the user has not given a file name */
-    if (argc < 2) {
-        printf("Usage: %s <filename.as>\n", argv[0]);
-        return 1;
+    if (!fin || !fout) {
+        fprintf(stderr, "Error: could not open %s or %s for cleaning spaces\n", in_filename, out_filename);
+        return;
     }
-
-    /* Step 1: Generate .pre and .am filenames */
-    strncpy(pre_filename, argv[1], FILENAME_MAX);
-    pre_filename[FILENAME_MAX - 1] = '\0';
-    char *dot = strrchr(pre_filename, '.');
-    if (dot != NULL) {
-        strcpy(dot, ".pre");
-    } else {
-        strcat(pre_filename, ".pre");
+    while (fgets(line, MAX_LINE_LENGTH, fin)) {
+        char buf[MAX_LINE_LENGTH];
+        int r = 0, w = 0;
+        bool in_space = false;
+        /* Trim leading spaces/tabs */
+        while (line[r] && isspace((unsigned char)line[r])) r++;
+        /* Process rest */
+        for (; line[r] && line[r] != '\n'; r++) {
+            if (isspace((unsigned char)line[r])) {
+                if (!in_space) {
+                    buf[w++] = ' ';
+                    in_space = true;
+                }
+            } else {
+                buf[w++] = line[r];
+                in_space = false;
+            }
+            if (w >= MAX_LINE_LENGTH - 1) break;
+        }
+        /* Trim trailing space */
+        if (w > 0 && buf[w - 1] == ' ') w--;
+        buf[w] = '\0';
+        fprintf(fout, "%s\n", buf);
     }
-
-    strncpy(am_filename, argv[1], FILENAME_MAX);
-    am_filename[FILENAME_MAX - 1] = '\0';
-    dot = strrchr(am_filename, '.');
-    if (dot != NULL) {
-        strcpy(dot, ".am");
-    } else {
-        strcat(am_filename, ".am");
-    }
-
-    /* Step 2: Run preprocessor to handle macros */
-    preprocess_file(argv[1], pre_filename);
-
-    /* Step 3: Expand macro usages and write to .am file */
-    expand_macros(pre_filename, am_filename);
-
-    /* Step 4: Open .am file for reading */
-    fp = fopen(am_filename, "r");
-    if (!fp) {
-        perror("Error opening .am file");
-        return 1;
-    }
-
-    /* Step 5: First Pass - build symbol table and initial code/data */
-    rewind(fp);
-    first_pass(fp);
-
-    /* Step 6: Second Pass - finalize entries, externs, and output files */
-    second_pass(fp, argv[1]);
-
-    /* Debug info */
-    print_memory();
-    print_symbol_table();
-
-    fclose(fp);
-    return 0;
+    fclose(fin);
+    fclose(fout);
 }
 
+/* Remove macro definitions (macro ... endmacro) -> .t02 */
+void remove_macro_decls_file(const char *in_filename, const char *out_filename) {
+    FILE *fin = fopen(in_filename, "r");
+    FILE *fout = fopen(out_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    bool in_macro = false;
+
+    if (!fin || !fout) {
+        fprintf(stderr, "Error: cannot open %s or %s for macro-stripping\n", in_filename, out_filename);
+        return;
+    }
+
+    while (fgets(line, MAX_LINE_LENGTH, fin)) {
+        /* start of macro definition? */
+        if (!in_macro && strncmp(line, "macro", 5) == 0) {
+            in_macro = true;
+            continue;
+        }
+        /* end of macro definition? */
+        if (in_macro && strncmp(line, "endmacro", 8) == 0) {
+            in_macro = false;
+            continue;
+        }
+        /* if not inside a macro definition, write the line */
+        if (!in_macro) {
+            fprintf(fout, "%s", line);
+        }
+    }
+
+    fclose(fin);
+    fclose(fout);
+}
+
+/* Remove spaces immediately before or after commas -> .t01a */
+void remove_spaces_next_to_comma_file(const char *in_filename, const char *out_filename) {
+    FILE *fin = fopen(in_filename, "r");
+    FILE *fout = fopen(out_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    if (!fin || !fout) {
+        fprintf(stderr, "Error: cannot open %s or %s for comma-spacing\n", in_filename, out_filename);
+        return;
+    }
+    while (fgets(line, MAX_LINE_LENGTH, fin)) {
+        char buf[MAX_LINE_LENGTH];
+        int r = 0, w = 0;
+        char c;
+        while ((c = line[r++]) && c != '\n') {
+            if (c == ' ' && line[r] == ',') continue;
+            if (c == ',' && line[r] == ' ') {
+                buf[w++] = ',';
+                r++;
+                continue;
+            }
+            buf[w++] = c;
+        }
+        buf[w] = '\0';
+        fprintf(fout, "%s\n", buf);
+    }
+    fclose(fin);
+    fclose(fout);
+}
+
+
+int main(int argc, char *argv[]) {
+    int file_index;
+    for (file_index = 1; file_index < argc; file_index++) {
+        const char *src = argv[file_index];
+        FILE *fp;
+        char t01[FILENAME_MAX], t01a[FILENAME_MAX], t02[FILENAME_MAX];
+        char pre[FILENAME_MAX], am[FILENAME_MAX];
+        char *dot;
+
+        /* build intermediate filenames based on src */
+        strncpy(t01, src, FILENAME_MAX);
+        t01[FILENAME_MAX-1] = '\0';
+        dot = strrchr(t01, '.');
+        if (dot) strcpy(dot, ".t01"); else strcat(t01, ".t01");
+
+        strncpy(t01a, t01, FILENAME_MAX);
+        t01a[FILENAME_MAX-1] = '\0';
+        dot = strrchr(t01a, '.');
+        if (dot) strcpy(dot, ".t01a"); else strcat(t01a, ".t01a");
+
+        strncpy(t02, t01a, FILENAME_MAX);
+        t02[FILENAME_MAX-1] = '\0';
+        dot = strrchr(t02, '.');
+        if (dot) strcpy(dot, ".t02"); else strcat(t02, ".t02");
+
+        strncpy(pre, src, FILENAME_MAX);
+        pre[FILENAME_MAX-1] = '\0';
+        dot = strrchr(pre, '.');
+        if (dot) strcpy(dot, ".pre"); else strcat(pre, ".pre");
+
+        strncpy(am, src, FILENAME_MAX);
+        am[FILENAME_MAX-1] = '\0';
+        dot = strrchr(am, '.');
+        if (dot) strcpy(dot, ".am"); else strcat(am, ".am");
+
+        /* 1. clean spaces -> .t01 */
+        remove_extra_spaces_file(src, t01);
+        /* 2. remove comma spaces -> .t01a */
+        remove_spaces_next_to_comma_file(t01, t01a);
+        /* 3. strip macros -> .t02 */
+        remove_macro_decls_file(t01a, t02);
+        /* 4. collect macro defs -> .pre */
+        preprocess_file(t02, pre);
+        /* 5. expand macros -> .am */
+        expand_macros(pre, am);
+
+        /* 6. open .am and first pass */
+        fp = fopen(am, "r");
+        if (!fp) {
+            fprintf(stderr, "Error: cannot open %s\n", am);
+            continue;
+        }
+        first_pass(fp, src);
+
+        /* 7. second pass + outputs */
+        rewind(fp);
+        mark_entries(fp);
+        generate_extra_operand_words();
+        create_entry_file(src);
+        write_ext_file(src);
+        create_ob_file(src);
+
+        print_memory();
+        print_symbol_table();
+
+        fclose(fp);
+        /* optionally free tables here before next file */
+    }
+    return 0;
+}

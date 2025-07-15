@@ -79,6 +79,15 @@ void add_macro(const char *name, const char *content) {
     macro_table = new_macro;
 }
 
+bool macro_exists(const char *name) {
+    Macro *cur = macro_table;
+    while (cur) {
+        if (strcmp(cur->name, name) == 0) return true;
+        cur = cur->next;
+    }
+    return false;
+}
+
 
 void preprocess_file(const char *input_filename, const char *output_filename) {
     FILE *input_fp = fopen(input_filename, "r");
@@ -86,32 +95,48 @@ void preprocess_file(const char *input_filename, const char *output_filename) {
     char line[MAX_LINE_LENGTH];
     char macro_name[MAX_LINE_LENGTH];
     char macro_content[MAX_LINE_LENGTH * 10];
-    int in_macro = 0;
+    bool in_macro = false;
 
     if (!input_fp || !output_fp) {
-        printf("Error: failed to open file(s).\n");
+        fprintf(stderr, "Error: failed to open %s or %s\n", input_filename, output_filename);
         return;
     }
 
     while (fgets(line, MAX_LINE_LENGTH, input_fp)) {
+        /* התחלת הגדרת מאקרו */
         if (strncmp(line, "macro", 5) == 0) {
-            in_macro = 1;
+            if (in_macro) {
+                fprintf(stderr, "%s: error: nested macro definitions not allowed\n", input_filename);
+                return;
+            }
             sscanf(line, "macro %s", macro_name);
-            macro_content[0] = '\0';  /* Clear macro content buffer */
+            if (macro_exists(macro_name)) {
+                fprintf(stderr, "%s: error: duplicate macro '%s'\n", input_filename, macro_name);
+                return;
+            }
+            in_macro = true;
+            macro_content[0] = '\0';
+            continue;
+        }
+
+        /* סוף הגדרת מאקרו */
+        if (in_macro && strncmp(line, "endmacro", 8) == 0) {
+            in_macro = false;
+            add_macro(macro_name, macro_content);
             continue;
         }
 
         if (in_macro) {
-            if (strncmp(line, "endmacro", 8) == 0) {
-                in_macro = 0;
-                add_macro(macro_name, macro_content);
-                continue;
-            }
-            strcat(macro_content, "\t");
-            strcat(macro_content, line);  /* Append line to macro content */
+            /* בתוך מאקרו – מצטבר לתוכן */
+            strcat(macro_content, line);
         } else {
-            fprintf(output_fp, "%s", line);  /* Regular line, write as-is */
+            /* מחוץ למאקרו – כותב לשורה ב־.pre */
+            fprintf(output_fp, "%s", line);
         }
+    }
+
+    if (in_macro) {
+        fprintf(stderr, "%s: error: missing endmacro for '%s'\n", input_filename, macro_name);
     }
 
     fclose(input_fp);
@@ -815,6 +840,7 @@ void print_symbol_table() {
 }
 
 
+
 /* Step 1: Remove extra spaces and tabs, collapse to single spaces */
 void remove_extra_spaces_file(const char *in_filename, const char *out_filename) {
     FILE *fin = fopen(in_filename, "r");
@@ -852,9 +878,44 @@ void remove_extra_spaces_file(const char *in_filename, const char *out_filename)
     fclose(fout);
 }
 
+/* Remove macro definitions (macro ... endmacro) -> .t02 */
+void remove_macro_decls_file(const char *in_filename, const char *out_filename) {
+    FILE *fin = fopen(in_filename, "r");
+    FILE *fout = fopen(out_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    bool in_macro = false;
+
+    if (!fin || !fout) {
+        fprintf(stderr, "Error: cannot open %s or %s for macro-stripping\n", in_filename, out_filename);
+        return;
+    }
+
+    while (fgets(line, MAX_LINE_LENGTH, fin)) {
+        /* start of macro definition? */
+        if (!in_macro && strncmp(line, "macro", 5) == 0) {
+            in_macro = true;
+            continue;
+        }
+        /* end of macro definition? */
+        if (in_macro && strncmp(line, "endmacro", 8) == 0) {
+            in_macro = false;
+            continue;
+        }
+        /* if not inside a macro definition, write the line */
+        if (!in_macro) {
+            fprintf(fout, "%s", line);
+        }
+    }
+
+    fclose(fin);
+    fclose(fout);
+}
+
+
 int main(int argc, char *argv[]) {
     FILE *fp;
     char t01_filename[FILENAME_MAX];
+    char t02_filename[FILENAME_MAX];
     char pre_filename[FILENAME_MAX];
     char am_filename[FILENAME_MAX];
     char *dot;
@@ -870,6 +931,12 @@ int main(int argc, char *argv[]) {
     dot = strrchr(t01_filename, '.');
     if (dot) strcpy(dot, ".t01"); else strcat(t01_filename, ".t01");
 
+    /* build .t02 name */
+    strncpy(t02_filename, t01_filename, FILENAME_MAX);
+    t02_filename[FILENAME_MAX - 1] = '\0';
+    dot = strrchr(t02_filename, '.');
+    if (dot) strcpy(dot, ".t02"); else strcat(t02_filename, ".t02");
+
     /* build .pre name */
     strncpy(pre_filename, argv[1], FILENAME_MAX);
     pre_filename[FILENAME_MAX - 1] = '\0';
@@ -882,16 +949,19 @@ int main(int argc, char *argv[]) {
     dot = strrchr(am_filename, '.');
     if (dot) strcpy(dot, ".am"); else strcat(am_filename, ".am");
 
-    /* Step 1: Remove extra spaces → .t01 */
+    /* Step 1: Remove extra spaces -> .t01 */
     remove_extra_spaces_file(argv[1], t01_filename);
 
-    /* Step 2: Preprocessor (macros) on cleaned file */
-    preprocess_file(t01_filename, pre_filename);
+    /* Step 2: Strip out macro definitions -> .t02 */
+    remove_macro_decls_file(t01_filename, t02_filename);
 
-    /* Step 3: Expand macros → .am */
+    /* Step 3: Preprocessor (collect macro definitions) -> .pre */
+    preprocess_file(t02_filename, pre_filename);
+
+    /* Step 4: Expand macros -> .am */
     expand_macros(pre_filename, am_filename);
 
-    /* Step 4: Open .am and First Pass */
+    /* Step 5: Open .am and First Pass */
     fp = fopen(am_filename, "r");
     if (!fp) {
         perror("Error opening .am file");
@@ -899,7 +969,7 @@ int main(int argc, char *argv[]) {
     }
     first_pass(fp);
 
-    /* Step 5: Second Pass and outputs */
+    /* Step 6: Second Pass and outputs */
     rewind(fp);
     mark_entries(fp);
     create_entry_file(argv[1]);

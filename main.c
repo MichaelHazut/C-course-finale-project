@@ -584,6 +584,15 @@ void first_pass(FILE *fp) {
     }
 }
 
+/* Perform the second pass: mark .entry labels, and write .ent, .ext and .ob files */
+void second_pass(FILE *fp, const char *orig_filename) {
+    rewind(fp);                  /* go back to start of .am file */
+    mark_entries(fp);            /* mark entry symbols */
+    create_entry_file(orig_filename);
+    write_ext_file(orig_filename);
+    create_ob_file(orig_filename);
+}
+
 /* Goes over the file again and handles .entry lines */
 void mark_entries(FILE *fp) {
     char line[MAX_LINE_LENGTH];
@@ -805,96 +814,102 @@ void print_symbol_table() {
     }
 }
 
+
+/* Step 1: Remove extra spaces and tabs, collapse to single spaces */
+void remove_extra_spaces_file(const char *in_filename, const char *out_filename) {
+    FILE *fin = fopen(in_filename, "r");
+    FILE *fout = fopen(out_filename, "w");
+    char line[MAX_LINE_LENGTH];
+    if (!fin || !fout) {
+        fprintf(stderr, "Error: could not open %s or %s for cleaning spaces\n", in_filename, out_filename);
+        return;
+    }
+    while (fgets(line, MAX_LINE_LENGTH, fin)) {
+        char buf[MAX_LINE_LENGTH];
+        int r = 0, w = 0;
+        bool in_space = false;
+        /* Trim leading spaces/tabs */
+        while (line[r] && isspace((unsigned char)line[r])) r++;
+        /* Process rest */
+        for (; line[r] && line[r] != '\n'; r++) {
+            if (isspace((unsigned char)line[r])) {
+                if (!in_space) {
+                    buf[w++] = ' ';
+                    in_space = true;
+                }
+            } else {
+                buf[w++] = line[r];
+                in_space = false;
+            }
+            if (w >= MAX_LINE_LENGTH - 1) break;
+        }
+        /* Trim trailing space */
+        if (w > 0 && buf[w - 1] == ' ') w--;
+        buf[w] = '\0';
+        fprintf(fout, "%s\n", buf);
+    }
+    fclose(fin);
+    fclose(fout);
+}
+
 int main(int argc, char *argv[]) {
     FILE *fp;
-    char line[MAX_LINE_LENGTH];
+    char t01_filename[FILENAME_MAX];
     char pre_filename[FILENAME_MAX];
     char am_filename[FILENAME_MAX];
+    char *dot;
 
-    /* If the user has not given a file name */
     if (argc < 2) {
         printf("Usage: %s <filename.as>\n", argv[0]);
         return 1;
     }
 
-    /* Step 1: Generate .pre and .am filenames */
+    /* build .t01 name */
+    strncpy(t01_filename, argv[1], FILENAME_MAX);
+    t01_filename[FILENAME_MAX - 1] = '\0';
+    dot = strrchr(t01_filename, '.');
+    if (dot) strcpy(dot, ".t01"); else strcat(t01_filename, ".t01");
+
+    /* build .pre name */
     strncpy(pre_filename, argv[1], FILENAME_MAX);
     pre_filename[FILENAME_MAX - 1] = '\0';
-    char *dot = strrchr(pre_filename, '.');
-    if (dot != NULL) {
-        strcpy(dot, ".pre");
-    } else {
-        strcat(pre_filename, ".pre");
-    }
+    dot = strrchr(pre_filename, '.');
+    if (dot) strcpy(dot, ".pre"); else strcat(pre_filename, ".pre");
 
+    /* build .am name */
     strncpy(am_filename, argv[1], FILENAME_MAX);
     am_filename[FILENAME_MAX - 1] = '\0';
     dot = strrchr(am_filename, '.');
-    if (dot != NULL) {
-        strcpy(dot, ".am");
-    } else {
-        strcat(am_filename, ".am");
-    }
+    if (dot) strcpy(dot, ".am"); else strcat(am_filename, ".am");
 
-    /* Step 2: Run preprocessor to handle macros */
-    preprocess_file(argv[1], pre_filename);
+    /* Step 1: Remove extra spaces → .t01 */
+    remove_extra_spaces_file(argv[1], t01_filename);
 
-    /* Step 3: Expand macro usages and write to .am file */
+    /* Step 2: Preprocessor (macros) on cleaned file */
+    preprocess_file(t01_filename, pre_filename);
+
+    /* Step 3: Expand macros → .am */
     expand_macros(pre_filename, am_filename);
 
-    /* Step 4: Open .am file for reading */
+    /* Step 4: Open .am and First Pass */
     fp = fopen(am_filename, "r");
     if (!fp) {
         perror("Error opening .am file");
         return 1;
     }
-
-    /* Step 5: First Pass - Print full contents */
-    printf("\n1) Full contents of the file:\n");
-    while (fgets(line, MAX_LINE_LENGTH, fp)) {
-        printf("%s", line);
-    }
-
-    /* Step 6: Second Pass - Analyze each line */
-    rewind(fp);
-    printf("\n\n\n2) Line analysis:");
-    while (fgets(line, MAX_LINE_LENGTH, fp)) {
-        printf("\n>> Line: | %s", line);
-
-        bool has_label = is_label(line);
-        bool has_directive = is_directive(line);
-        bool has_instruction = is_instruction(line);
-
-        if (has_label) {
-            printf("=> Type: Label\n");
-        }
-        if (has_directive) {
-            printf("=> Type: Directive\n");
-        }
-        if (has_instruction) {
-            printf("=> Type: Instruction\n");
-            parse_instruction(line);
-        }
-        if (!has_label && !has_directive && !has_instruction) {
-            printf("=> Type: Unknown or empty line\n");
-        }
-    }
-
-    /* Step 7: Assemble */
-    printf("\n\n\n2) Line analysis:");
-    rewind(fp);
     first_pass(fp);
+
+    /* Step 5: Second Pass and outputs */
     rewind(fp);
     mark_entries(fp);
     create_entry_file(argv[1]);
     write_ext_file(argv[1]);
     create_ob_file(argv[1]);
 
-    /* Debug info */
+    /* Debug output */
     print_memory();
     print_symbol_table();
 
     fclose(fp);
     return 0;
 }
-

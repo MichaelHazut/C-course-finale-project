@@ -1256,83 +1256,72 @@ void remove_spaces_next_to_comma_file(const char *in_filename, const char *out_f
 
 
 int main(int argc, char *argv[]) {
-    FILE *fp;
-    char t01_filename[FILENAME_MAX];
-    char t01a_filename[FILENAME_MAX];  /* after comma-cleaning */
-    char t02_filename[FILENAME_MAX];
-    char pre_filename[FILENAME_MAX];
-    char am_filename[FILENAME_MAX];
-    char *dot;
+    int file_index;
+    for (file_index = 1; file_index < argc; file_index++) {
+        const char *src = argv[file_index];
+        FILE *fp;
+        char t01[FILENAME_MAX], t01a[FILENAME_MAX], t02[FILENAME_MAX];
+        char pre[FILENAME_MAX], am[FILENAME_MAX];
+        char *dot;
 
-    if (argc < 2) {
-        printf("Usage: %s <filename.as>\n", argv[0]);
-        return 1;
+        /* build intermediate filenames based on src */
+        strncpy(t01, src, FILENAME_MAX);
+        t01[FILENAME_MAX-1] = '\0';
+        dot = strrchr(t01, '.');
+        if (dot) strcpy(dot, ".t01"); else strcat(t01, ".t01");
+
+        strncpy(t01a, t01, FILENAME_MAX);
+        t01a[FILENAME_MAX-1] = '\0';
+        dot = strrchr(t01a, '.');
+        if (dot) strcpy(dot, ".t01a"); else strcat(t01a, ".t01a");
+
+        strncpy(t02, t01a, FILENAME_MAX);
+        t02[FILENAME_MAX-1] = '\0';
+        dot = strrchr(t02, '.');
+        if (dot) strcpy(dot, ".t02"); else strcat(t02, ".t02");
+
+        strncpy(pre, src, FILENAME_MAX);
+        pre[FILENAME_MAX-1] = '\0';
+        dot = strrchr(pre, '.');
+        if (dot) strcpy(dot, ".pre"); else strcat(pre, ".pre");
+
+        strncpy(am, src, FILENAME_MAX);
+        am[FILENAME_MAX-1] = '\0';
+        dot = strrchr(am, '.');
+        if (dot) strcpy(dot, ".am"); else strcat(am, ".am");
+
+        /* 1. clean spaces -> .t01 */
+        remove_extra_spaces_file(src, t01);
+        /* 2. remove comma spaces -> .t01a */
+        remove_spaces_next_to_comma_file(t01, t01a);
+        /* 3. strip macros -> .t02 */
+        remove_macro_decls_file(t01a, t02);
+        /* 4. collect macro defs -> .pre */
+        preprocess_file(t02, pre);
+        /* 5. expand macros -> .am */
+        expand_macros(pre, am);
+
+        /* 6. open .am and first pass */
+        fp = fopen(am, "r");
+        if (!fp) {
+            fprintf(stderr, "Error: cannot open %s\n", am);
+            continue;
+        }
+        first_pass(fp, src);
+
+        /* 7. second pass + outputs */
+        rewind(fp);
+        mark_entries(fp);
+        generate_extra_operand_words();
+        create_entry_file(src);
+        write_ext_file(src);
+        create_ob_file(src);
+
+        print_memory();
+        print_symbol_table();
+
+        fclose(fp);
+        /* optionally free tables here before next file */
     }
-
-    /* build .t01 name */
-    strncpy(t01_filename, argv[1], FILENAME_MAX);
-    t01_filename[FILENAME_MAX-1] = '\0';
-    dot = strrchr(t01_filename, '.');
-    if (dot) strcpy(dot, ".t01"); else strcat(t01_filename, ".t01");
-
-    /* build .t01a name */
-    strncpy(t01a_filename, t01_filename, FILENAME_MAX);
-    t01a_filename[FILENAME_MAX-1] = '\0';
-    dot = strrchr(t01a_filename, '.');
-    if (dot) strcpy(dot, ".t01a"); else strcat(t01a_filename, ".t01a");
-
-    /* build .t02 name */
-    strncpy(t02_filename, t01a_filename, FILENAME_MAX);
-    t02_filename[FILENAME_MAX-1] = '\0';
-    dot = strrchr(t02_filename, '.');
-    if (dot) strcpy(dot, ".t02"); else strcat(t02_filename, ".t02");
-
-    /* build .pre name */
-    strncpy(pre_filename, argv[1], FILENAME_MAX);
-    pre_filename[FILENAME_MAX-1] = '\0';
-    dot = strrchr(pre_filename, '.');
-    if (dot) strcpy(dot, ".pre"); else strcat(pre_filename, ".pre");
-
-    /* build .am name */
-    strncpy(am_filename, argv[1], FILENAME_MAX);
-    am_filename[FILENAME_MAX-1] = '\0';
-    dot = strrchr(am_filename, '.');
-    if (dot) strcpy(dot, ".am"); else strcat(am_filename, ".am");
-
-    /* Step 1: Remove extra spaces -> .t01 */
-    remove_extra_spaces_file(argv[1], t01_filename);
-
-    /* Step 1b: Remove spaces around commas -> .t01a */
-    remove_spaces_next_to_comma_file(t01_filename, t01a_filename);
-
-    /* Step 2: Strip out macro definitions -> .t02 */
-    remove_macro_decls_file(t01a_filename, t02_filename);
-
-    /* Step 3: Preprocessor (collect definitions) -> .pre */
-    preprocess_file(t02_filename, pre_filename);
-
-    /* Step 4: Expand macros -> .am */
-    expand_macros(pre_filename, am_filename);
-
-    /* Step 5: First Pass */
-    fp = fopen(am_filename, "r");
-    if (!fp) {
-        perror("Error opening .am file");
-        return 1;
-    }
-    first_pass(fp, argv[1]);
-
-    /* Step 6: Second Pass and output files */
-    rewind(fp);
-    mark_entries(fp);
-    create_entry_file(argv[1]);
-    write_ext_file(argv[1]);
-    create_ob_file(argv[1]);
-
-    /* Debug prints */
-    print_memory();
-    print_symbol_table();
-
-    fclose(fp);
     return 0;
 }

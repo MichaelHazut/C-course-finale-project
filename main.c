@@ -11,6 +11,20 @@
 #define true 1
 #define false 0
 
+/* bit-masks for addressing modes */
+#define MODE_IMM (1<<0)
+#define MODE_DIR (1<<1)
+#define MODE_IDX (1<<2)
+#define MODE_REG (1<<3)
+
+/* Information for each opcode */
+typedef struct {
+    const char *name;
+    int code;
+    int num_operands;
+    int src_mask;   /* which modes allowed for src */
+    int dst_mask;   /* which modes allowed for dst */
+} OpcodeInfo;
 
 /* Represents a line in memory (instruction or data) */
 typedef struct {
@@ -49,6 +63,38 @@ typedef struct Macro {
     struct Macro *next;
 } Macro;
 
+/* static table of all 16 opcodes */
+static const OpcodeInfo opcode_table[] = {
+    {"mov", 0, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_DIR|MODE_IDX|MODE_REG},
+    {"cmp", 1, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG},
+    {"add", 2, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_DIR|MODE_IDX|MODE_REG},
+    {"sub", 3, 2, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, MODE_DIR|MODE_IDX|MODE_REG},
+    {"not", 4, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"clr", 5, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"lea", 6, 2, MODE_DIR|MODE_IDX,       MODE_DIR|MODE_IDX|MODE_REG},
+    {"inc", 7, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"dec", 8, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"jmp", 9, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"bne",10, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"jsr",11, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"red",12, 1, 0,                        MODE_DIR|MODE_IDX|MODE_REG},
+    {"prn",13, 1, MODE_IMM|MODE_DIR|MODE_IDX|MODE_REG, 0},
+    {"rts",14, 0, 0,                        0},
+    {"stop",15,0, 0,                        0}
+};
+static const int OPCODE_COUNT = sizeof(opcode_table)/sizeof(opcode_table[0]);
+
+/* Lookup an OpcodeInfo by name, or return NULL */
+const OpcodeInfo* find_opcode(const char *name) {
+    int i;
+    for (i = 0; i < OPCODE_COUNT; i++) {
+        if (strcmp(opcode_table[i].name, name) == 0)
+            return &opcode_table[i];
+    }
+    return NULL;
+}
+
+
 /* Macro table */
 Macro *macro_table = NULL;
 
@@ -64,6 +110,58 @@ Symbol *symbol_table_head = NULL;
 /* Instruction list */
 InstructionNode *instruction_head = NULL;
 InstructionNode *instruction_tail = NULL;
+
+
+/* Validate operand count and addressing modes for one instruction */
+bool validate_instruction(const char *line, int line_num, const char *file_name) {
+    char buf[MAX_LINE_LENGTH];
+    strncpy(buf, line, MAX_LINE_LENGTH);
+    buf[MAX_LINE_LENGTH-1] = '\0';
+
+    /* strip label */
+    char *instr = strchr(buf, ':');
+    if (instr) instr++;
+    else instr = buf;
+
+    /* parse opcode and operands */
+    char *opc = strtok(instr, " \t\n");
+    if (!opc) return true;  /* nothing to do */
+
+    const OpcodeInfo *info = find_opcode(opc);
+    if (!info) {
+        fprintf(stderr, "%s:%d: error: unknown opcode '%s'\n", file_name, line_num, opc);
+        return false;
+    }
+
+    /* count operands */
+    char *op1 = strtok(NULL, ", \t\n");
+    char *op2 = strtok(NULL, ", \t\n");
+    int count = (op2 ? 2 : (op1 ? 1 : 0));
+    if (count != info->num_operands) {
+        fprintf(stderr, "%s:%d: error: '%s' expects %d operands, got %d\n",
+                file_name, line_num, opc, info->num_operands, count);
+        return false;
+    }
+
+    /* check addressing modes */
+    if (op1) {
+        int m1 = detect_addressing_mode(op1);
+        if (!(info->src_mask & (1<<m1))) {
+            fprintf(stderr, "%s:%d: error: addressing mode %d not allowed for source of '%s'\n",
+                    file_name, line_num, m1, opc);
+            return false;
+        }
+    }
+    if (op2) {
+        int m2 = detect_addressing_mode(op2);
+        if (!(info->dst_mask & (1<<m2))) {
+            fprintf(stderr, "%s:%d: error: addressing mode %d not allowed for dest of '%s'\n",
+                    file_name, line_num, m2, opc);
+            return false;
+        }
+    }
+    return true;
+}
 
 
 void add_macro(const char *name, const char *content) {
@@ -569,7 +667,7 @@ void parse_data_directive(const char *line_ptr) {
 }
 
 
-void first_pass(FILE *fp) {
+void first_pass(FILE *fp, const char *filename) {
     char line[MAX_LINE_LENGTH];
     char *line_ptr;
     int line_number = 0;
@@ -580,10 +678,7 @@ void first_pass(FILE *fp) {
         Symbol *new_sym;
         InstructionNode *new_instr;
         char label_name[MAX_LINE_LENGTH];
-
-        int is_label_line;
-        int is_dir;
-        int is_instr;
+        int is_label_line, is_dir, is_instr;
 
         line_number++;
 
@@ -592,64 +687,67 @@ void first_pass(FILE *fp) {
             continue;
         }
 
-        /* Start from the beginning of line */
+        /* Trim leading whitespace */
         line_ptr = line;
-
-        /* Trim leading spaces */
-        while (isspace(*line_ptr)) {
+        while (isspace((unsigned char)*line_ptr)) {
             line_ptr++;
         }
 
         is_label_line = is_label(line_ptr);
-        is_dir = is_directive(line_ptr);
-        is_instr = is_instruction(line_ptr);
+        is_dir        = is_directive(line_ptr);
+        is_instr      = is_instruction(line_ptr);
 
-        /* If the line has a label, extract and register it */
+        /* Handle label definition */
         if (is_label_line) {
+            /* extract label name */
             sscanf(line_ptr, "%[^:]:", label_name);
 
-            new_sym = (Symbol *)malloc(sizeof(Symbol));
+            new_sym = malloc(sizeof(Symbol));
             if (!new_sym) {
-                printf("Memory allocation error at line %d\n", line_number);
+                fprintf(stderr, "%s:%d: error: memory allocation failed for symbol\n", filename, line_number);
                 continue;
             }
-
             strcpy(new_sym->name, label_name);
-            new_sym->address = memory_counter;
-            new_sym->is_entry = 0;
-            new_sym->is_external = 0;
-            new_sym->is_data = is_dir;
-            new_sym->next = symbol_table_head;
-            symbol_table_head = new_sym;
+            new_sym->address      = memory_counter;
+            new_sym->is_entry     = false;
+            new_sym->is_external  = false;
+            new_sym->is_data      = is_dir;
+            new_sym->next         = symbol_table_head;
+            symbol_table_head     = new_sym;
 
-            /* Move pointer after label */
+            /* advance pointer past label */
             line_ptr = strchr(line_ptr, ':');
-            if (line_ptr != NULL) {
+            if (line_ptr) {
                 line_ptr++;
-                while (isspace(*line_ptr)) {
+                while (isspace((unsigned char)*line_ptr)) {
                     line_ptr++;
                 }
             }
         }
 
-        /* If it's a directive (.data / .string) */
+        /* Handle directive (.data/.string/.extern/.entry/.mat) */
         if (is_dir) {
             parse_data_directive(line_ptr);
         }
-        /* If it's an instruction */
+        /* Handle instruction */
         else if (is_instr) {
-            new_instr = (InstructionNode *)malloc(sizeof(InstructionNode));
-            if (!new_instr) {
-                printf("Memory allocation error at line %d\n", line_number);
+            /* validate operand count and addressing modes */
+            if (!validate_instruction(line_ptr, line_number, filename)) {
                 continue;
             }
 
+            /* create new instruction node */
+            new_instr = malloc(sizeof(InstructionNode));
+            if (!new_instr) {
+                fprintf(stderr, "%s:%d: error: memory allocation failed for instruction node\n", filename, line_number);
+                continue;
+            }
             new_instr->address = memory_counter;
             strncpy(new_instr->line, line_ptr, MAX_LINE_LENGTH);
             new_instr->line[MAX_LINE_LENGTH - 1] = '\0';
             new_instr->next = NULL;
 
-            /* Add to instruction list */
+            /* append to instruction list */
             if (instruction_head == NULL) {
                 instruction_head = new_instr;
                 instruction_tail = new_instr;
@@ -658,16 +756,19 @@ void first_pass(FILE *fp) {
                 instruction_tail = new_instr;
             }
 
-            /* Store this instruction in memory[] as code */
+            /* encode primary instruction word */
             if (memory_counter < MAX_MEMORY) {
                 memory[memory_counter].address = memory_counter;
-                memory[memory_counter].value = encode_instruction(line_ptr);
+                memory[memory_counter].value   = encode_instruction(line_ptr);
                 memory[memory_counter].is_code = 1;
             } else {
-                printf("Error: memory overflow when adding instruction at line %d.\n", line_number);
+                fprintf(stderr, "%s:%d: error: memory overflow when adding instruction\n", filename, line_number);
             }
-
-            memory_counter++;  /* Instruction takes 1 memory word */
+            memory_counter++;
+        }
+        /* Unknown or invalid line */
+        else {
+            fprintf(stderr, "%s:%d: error: unrecognized statement\n", filename, line_number);
         }
     }
 }
@@ -1069,7 +1170,7 @@ int main(int argc, char *argv[]) {
         perror("Error opening .am file");
         return 1;
     }
-    first_pass(fp);
+    first_pass(fp, argv[1]);
 
     /* Step 6: Second Pass and output files */
     rewind(fp);

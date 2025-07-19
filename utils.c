@@ -1,5 +1,4 @@
 #include "utils.h"
-#include <stdlib.h>
 
 int detect_addressing_mode(const char *operand)
 {

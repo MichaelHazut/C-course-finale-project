@@ -1,13 +1,4 @@
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
 #include "pass.h"
-#include "utils.h"
-#include "directive.h"
-#include "instruction.h"
-#include "symbol.h"
-#include "memory.h"
-
 /* First pass: parse each line, register labels, directives, instructions */
 void first_pass(FILE *fp)
 {

@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* Detect addressing mode for an operand:
    0 = immediate (#number)

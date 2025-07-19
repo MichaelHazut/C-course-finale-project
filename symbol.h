@@ -2,6 +2,8 @@
 #define SYMBOL_H
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Boolean type for ANSI C */
 #define bool int

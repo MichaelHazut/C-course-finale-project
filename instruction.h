@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 #include <ctype.h>
+#include <string.h>
+#include "utils.h"
 
 #define MAX_LINE_LENGTH 81
 

@@ -2,6 +2,14 @@
 #define PASS_H
 
 #include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include "utils.h"
+#include "directive.h"
+#include "instruction.h"
+#include "symbol.h"
+#include "memory.h"
+
 
 /* Perform the first assembler pass:
  *  - build symbol table

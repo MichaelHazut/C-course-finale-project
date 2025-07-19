@@ -2,6 +2,7 @@
 #define MEMORY_H
 
 #include <stdio.h>
+#include <string.h>
 
 /* Size of the entire memory image */
 #define MAX_MEMORY 1024

@@ -1,6 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include "symbol.h"
 
 Symbol *symbol_table_head = NULL;

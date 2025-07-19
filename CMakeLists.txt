@@ -4,7 +4,7 @@ project(FinaleProj C)
 set(CMAKE_C_STANDARD 90)
 add_compile_options(-Wall -pedantic -ansi)
 
-add_executable(main main_test.c
+add_executable(main main.c
         macro.c
         macro.h
         symbol.c

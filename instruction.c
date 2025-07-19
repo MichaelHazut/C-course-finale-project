@@ -1,8 +1,4 @@
-#include <stdio.h>
-#include <string.h>
-#include <ctype.h>
 #include "instruction.h"
-#include "utils.h"
 
 int is_instruction(const char *line)
 {
